@@ -6,6 +6,7 @@ version: 1.0.0
 date-released: 2026-01-02
 url: "https://github.com/PDA-Task-Force/pda-platform"
 repository-code: "https://github.com/PDA-Task-Force/pda-platform"
+doi: 10.5281/zenodo.18133574
 license: MIT
 authors:
   - name: "Members of the PDA Task Force"
