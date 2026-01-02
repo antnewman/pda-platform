@@ -1,0 +1,36 @@
+[project]
+name = "pm-mcp-servers"
+version = "0.1.0"
+description = "MCP servers for AI-enabled project management. Enables Claude to interact with PM data."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Members of the PDA Task Force"}
+]
+dependencies = [
+    "mcp>=0.9.0",
+]
+keywords = ["mcp", "model-context-protocol", "claude", "ai", "project-management"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[project.urls]
+Homepage = "https://github.com/PDA-Task-Force/pda-platform"
+Repository = "https://github.com/PDA-Task-Force/pda-platform"
+Documentation = "https://github.com/PDA-Task-Force/pda-platform/tree/main/packages/pm-mcp-servers"
+Issues = "https://github.com/PDA-Task-Force/pda-platform/issues"
+
+[project.scripts]
+pm-data-server = "pm_mcp_servers.pm_data.server:main"
+pm-validate-server = "pm_mcp_servers.pm_validate.server:main"
+pm-analyse-server = "pm_mcp_servers.pm_analyse.server:main"
+pm-benchmark-server = "pm_mcp_servers.pm_benchmark.server:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
