@@ -1,0 +1,136 @@
+{
+  "data": {
+    "boards": [
+      {
+        "id": "123456",
+        "name": "Project Alpha",
+        "groups": [
+          {
+            "id": "group1",
+            "title": "Planning Phase",
+            "items": [
+              {
+                "id": "item1",
+                "name": "Define requirements",
+                "column_values": [
+                  {
+                    "id": "status",
+                    "type": "status",
+                    "title": "Status",
+                    "value": "{\"label\": \"Done\"}"
+                  },
+                  {
+                    "id": "timeline",
+                    "type": "timeline",
+                    "title": "Timeline",
+                    "value": "{\"from\": \"2025-01-01\", \"to\": \"2025-01-15\"}"
+                  },
+                  {
+                    "id": "progress",
+                    "type": "progress",
+                    "title": "Progress",
+                    "value": "{\"value\": 100}"
+                  },
+                  {
+                    "id": "people",
+                    "type": "people",
+                    "title": "Assigned To",
+                    "value": "{\"personsAndTeams\": [{\"id\": 1, \"name\": \"Alice Smith\"}]}"
+                  }
+                ],
+                "subitems": []
+              },
+              {
+                "id": "item2",
+                "name": "Create design mockups",
+                "column_values": [
+                  {
+                    "id": "status",
+                    "type": "status",
+                    "title": "Status",
+                    "value": "{\"label\": \"Working on it\"}"
+                  },
+                  {
+                    "id": "timeline",
+                    "type": "timeline",
+                    "title": "Timeline",
+                    "value": "{\"from\": \"2025-01-10\", \"to\": \"2025-01-25\"}"
+                  },
+                  {
+                    "id": "progress",
+                    "type": "progress",
+                    "title": "Progress",
+                    "value": "{\"value\": 50}"
+                  },
+                  {
+                    "id": "people",
+                    "type": "people",
+                    "title": "Assigned To",
+                    "value": "{\"personsAndTeams\": [{\"id\": 2, \"name\": \"Bob Jones\"}]}"
+                  }
+                ],
+                "subitems": [
+                  {
+                    "id": "subitem1",
+                    "name": "Wireframes",
+                    "column_values": [
+                      {
+                        "id": "status",
+                        "type": "status",
+                        "title": "Status",
+                        "value": "{\"label\": \"Done\"}"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "subitem2",
+                    "name": "High-fidelity mockups",
+                    "column_values": [
+                      {
+                        "id": "status",
+                        "type": "status",
+                        "title": "Status",
+                        "value": "{\"label\": \"Working on it\"}"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "group2",
+            "title": "Development Phase",
+            "items": [
+              {
+                "id": "item3",
+                "name": "Implement frontend",
+                "column_values": [
+                  {
+                    "id": "status",
+                    "type": "status",
+                    "title": "Status",
+                    "value": "{\"label\": \"Not Started\"}"
+                  },
+                  {
+                    "id": "date",
+                    "type": "date",
+                    "title": "Due Date",
+                    "value": "{\"date\": \"2025-02-15\"}"
+                  },
+                  {
+                    "id": "people",
+                    "type": "people",
+                    "title": "Assigned To",
+                    "value": "{\"personsAndTeams\": [{\"id\": 1, \"name\": \"Alice Smith\"}, {\"id\": 3, \"name\": \"Carol White\"}]}"
+                  }
+                ],
+                "subitems": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

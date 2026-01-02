@@ -1,0 +1,394 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/PDA-Task-Force/pm-data-tools/schemas/nista/v1.0/project.schema.json",
+  "title": "NISTA Programme and Project Data Standard v1.0",
+  "description": "JSON Schema for UK Government Programme and Project Data Standard (NISTA, December 2025). Based on GMPP data structure with NISTA compliance requirements.",
+  "type": "object",
+  "required": [
+    "project_id",
+    "project_name",
+    "department",
+    "category",
+    "delivery_confidence_assessment_ipa",
+    "start_date_baseline",
+    "end_date_baseline",
+    "whole_life_cost_baseline"
+  ],
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "description": "Unique project identifier in GMPP format (e.g., DFT_0048_2021-Q3)",
+      "pattern": "^[A-Z]+_[0-9]+_[0-9]{4}-Q[1-4]$",
+      "examples": ["DFT_0048_2021-Q3", "MOD_0123_2024-Q2"]
+    },
+    "project_name": {
+      "type": "string",
+      "description": "Full project name",
+      "minLength": 1,
+      "examples": ["2nd Generation UK Search and Rescue Aviation"]
+    },
+    "department": {
+      "type": "string",
+      "description": "Owning government department abbreviation",
+      "examples": ["DFT", "MOD", "DHSC", "DEFRA", "HO", "DBT"],
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "description": "Project classification category",
+      "enum": [
+        "Infrastructure and Construction",
+        "Government Transformation and Service Delivery",
+        "Military Capability",
+        "ICT"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "description": "Project description and aims",
+      "examples": ["The UK Search and Rescue Second Generation (ULSAR2G) programme..."]
+    },
+    "delivery_confidence_assessment_ipa": {
+      "type": "string",
+      "description": "IPA's delivery confidence assessment at a fixed point in time",
+      "enum": ["Green", "Amber", "Red", "Exempt", ""],
+      "examples": ["Green"]
+    },
+    "delivery_confidence_assessment_sro": {
+      "type": "string",
+      "description": "Senior Responsible Owner's delivery confidence assessment",
+      "enum": ["Green", "Amber", "Red", "Exempt", ""],
+      "examples": ["Amber"]
+    },
+    "ipa_rating_commentary": {
+      "type": "string",
+      "description": "Departmental commentary on actions planned or taken on the IPA RAG rating"
+    },
+    "senior_responsible_owner": {
+      "type": "object",
+      "description": "Senior Responsible Owner details",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "SRO full name"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "SRO contact email"
+        },
+        "title": {
+          "type": "string",
+          "description": "SRO job title"
+        }
+      }
+    },
+    "start_date_baseline": {
+      "type": "string",
+      "format": "date",
+      "description": "Latest approved start date (baseline)",
+      "examples": ["2019-12-16"]
+    },
+    "end_date_baseline": {
+      "type": "string",
+      "format": "date",
+      "description": "Latest approved end date (baseline)",
+      "examples": ["2026-12-31"]
+    },
+    "start_date_forecast": {
+      "type": "string",
+      "format": "date",
+      "description": "Forecast start date (if different from baseline)"
+    },
+    "end_date_forecast": {
+      "type": "string",
+      "format": "date",
+      "description": "Forecast end date (if different from baseline)"
+    },
+    "schedule_narrative": {
+      "type": "string",
+      "description": "Departmental narrative on schedule, including any deviation from planned schedule"
+    },
+    "financial_year_baseline": {
+      "type": "number",
+      "description": "Annual baseline budget in £ millions (including Non-Government Costs)",
+      "minimum": 0,
+      "examples": [150.5]
+    },
+    "financial_year_forecast": {
+      "type": "number",
+      "description": "Annual forecast spend in £ millions (including Non-Government Costs)",
+      "minimum": 0,
+      "examples": [158.2]
+    },
+    "financial_year_variance_percent": {
+      "type": "number",
+      "description": "Percentage variance between baseline and forecast",
+      "examples": [5.1]
+    },
+    "budget_variance_narrative": {
+      "type": "string",
+      "description": "Departmental narrative on budget/forecast variance (required if variance > 5%)"
+    },
+    "whole_life_cost_baseline": {
+      "type": "number",
+      "description": "Total baseline whole life cost in £ millions (including Non-Government Costs)",
+      "minimum": 0,
+      "examples": [1959]
+    },
+    "whole_life_cost_forecast": {
+      "type": "number",
+      "description": "Total forecast whole life cost in £ millions (if different from baseline)",
+      "minimum": 0
+    },
+    "whole_life_cost_narrative": {
+      "type": "string",
+      "description": "Departmental narrative on budgeted whole life costs"
+    },
+    "benefits_baseline": {
+      "type": "number",
+      "description": "Total baseline monetised benefits in £ millions",
+      "minimum": 0,
+      "examples": [24475]
+    },
+    "benefits_forecast": {
+      "type": "number",
+      "description": "Total forecast monetised benefits in £ millions (if different from baseline)",
+      "minimum": 0
+    },
+    "benefits_non_monetised": {
+      "type": "array",
+      "description": "List of non-monetised benefits",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "description": "Description of the non-monetised benefit"
+          },
+          "category": {
+            "type": "string",
+            "description": "Benefit category (e.g., social, environmental, strategic)",
+            "enum": ["Social", "Environmental", "Strategic", "Other"]
+          }
+        },
+        "required": ["description"]
+      }
+    },
+    "benefits_narrative": {
+      "type": "string",
+      "description": "Departmental narrative on budgeted benefits"
+    },
+    "milestones": {
+      "type": "array",
+      "description": "Key project milestones and dates",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Milestone name"
+          },
+          "baseline_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Baseline completion date"
+          },
+          "forecast_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Forecast completion date"
+          },
+          "actual_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Actual completion date (if completed)"
+          },
+          "status": {
+            "type": "string",
+            "description": "Milestone status",
+            "enum": ["Not Started", "In Progress", "Completed", "At Risk", "Delayed"]
+          }
+        },
+        "required": ["name", "baseline_date"]
+      }
+    },
+    "risks_summary": {
+      "type": "object",
+      "description": "Summary of project risks",
+      "properties": {
+        "total_count": {
+          "type": "integer",
+          "description": "Total number of identified risks",
+          "minimum": 0
+        },
+        "high_count": {
+          "type": "integer",
+          "description": "Number of high-severity risks",
+          "minimum": 0
+        },
+        "medium_count": {
+          "type": "integer",
+          "description": "Number of medium-severity risks",
+          "minimum": 0
+        },
+        "low_count": {
+          "type": "integer",
+          "description": "Number of low-severity risks",
+          "minimum": 0
+        },
+        "top_risks": {
+          "type": "array",
+          "description": "Top 3-5 risks by severity",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["High", "Medium", "Low"]
+              },
+              "mitigation": {
+                "type": "string",
+                "description": "Mitigation strategy"
+              }
+            },
+            "required": ["description", "severity"]
+          },
+          "maxItems": 5
+        }
+      }
+    },
+    "issues_summary": {
+      "type": "object",
+      "description": "Summary of project issues",
+      "properties": {
+        "total_count": {
+          "type": "integer",
+          "description": "Total number of open issues",
+          "minimum": 0
+        },
+        "critical_count": {
+          "type": "integer",
+          "description": "Number of critical issues",
+          "minimum": 0
+        },
+        "top_issues": {
+          "type": "array",
+          "description": "Top 3-5 issues by severity",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["Critical", "High", "Medium", "Low"]
+              },
+              "resolution_plan": {
+                "type": "string",
+                "description": "Plan to resolve the issue"
+              }
+            },
+            "required": ["description", "severity"]
+          },
+          "maxItems": 5
+        }
+      }
+    },
+    "custom_fields": {
+      "type": "object",
+      "description": "Department-specific custom fields for extensibility",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadata about this data submission",
+      "properties": {
+        "reporting_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date of this data snapshot (e.g., 2024-03-31)"
+        },
+        "schema_version": {
+          "type": "string",
+          "description": "NISTA schema version",
+          "examples": ["1.0"]
+        },
+        "source_system": {
+          "type": "string",
+          "description": "Source system that generated this data"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of last update"
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "strictness_levels": {
+      "description": "Three compliance strictness levels for validation",
+      "lenient": {
+        "description": "Lenient mode - only critical GMPP fields required (backward compatible)",
+        "required_fields": [
+          "project_id",
+          "project_name",
+          "department",
+          "category",
+          "delivery_confidence_assessment_ipa",
+          "start_date_baseline",
+          "end_date_baseline",
+          "whole_life_cost_baseline"
+        ]
+      },
+      "standard": {
+        "description": "Standard mode - all required fields, warn on recommended",
+        "required_fields": [
+          "project_id",
+          "project_name",
+          "department",
+          "category",
+          "delivery_confidence_assessment_ipa",
+          "delivery_confidence_assessment_sro",
+          "senior_responsible_owner",
+          "start_date_baseline",
+          "end_date_baseline",
+          "whole_life_cost_baseline",
+          "benefits_baseline"
+        ],
+        "recommended_fields": [
+          "description",
+          "milestones",
+          "risks_summary",
+          "issues_summary"
+        ]
+      },
+      "strict": {
+        "description": "Strict mode - treat recommended as required",
+        "required_fields": [
+          "project_id",
+          "project_name",
+          "department",
+          "category",
+          "delivery_confidence_assessment_ipa",
+          "delivery_confidence_assessment_sro",
+          "senior_responsible_owner",
+          "description",
+          "start_date_baseline",
+          "end_date_baseline",
+          "whole_life_cost_baseline",
+          "benefits_baseline",
+          "milestones",
+          "risks_summary",
+          "issues_summary"
+        ]
+      }
+    }
+  }
+}

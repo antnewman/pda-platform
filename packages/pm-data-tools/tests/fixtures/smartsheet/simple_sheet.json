@@ -1,0 +1,64 @@
+{
+  "data": {
+    "id": "987654321",
+    "name": "Project Plan",
+    "rows": [
+      {
+        "id": 1,
+        "name": "Phase 1: Planning",
+        "cells": [
+          {"columnId": 1, "value": "Phase 1: Planning"},
+          {"columnId": 2, "columnType": "PERCENT_COMPLETE", "value": 0.75},
+          {"columnId": 3, "columnType": "DATE", "value": "2025-01-01"},
+          {"columnId": 4, "columnType": "DATE", "value": "2025-01-31"}
+        ]
+      },
+      {
+        "id": 2,
+        "parentId": 1,
+        "name": "Requirements gathering",
+        "cells": [
+          {"columnId": 1, "value": "Requirements gathering"},
+          {"columnId": 2, "columnType": "PERCENT_COMPLETE", "value": 1.0},
+          {"columnId": 3, "columnType": "DATE", "value": "2025-01-01"},
+          {"columnId": 4, "columnType": "DATE", "value": "2025-01-15"},
+          {"columnId": 5, "columnType": "CONTACT_LIST", "value": "alice@example.com"}
+        ]
+      },
+      {
+        "id": 3,
+        "parentId": 1,
+        "name": "Design mockups",
+        "cells": [
+          {"columnId": 1, "value": "Design mockups"},
+          {"columnId": 2, "columnType": "PERCENT_COMPLETE", "value": 0.5},
+          {"columnId": 3, "columnType": "DATE", "value": "2025-01-16"},
+          {"columnId": 4, "columnType": "DATE", "value": "2025-01-31"},
+          {"columnId": 5, "columnType": "CONTACT_LIST", "value": "bob@example.com"}
+        ]
+      },
+      {
+        "id": 4,
+        "name": "Phase 2: Development",
+        "cells": [
+          {"columnId": 1, "value": "Phase 2: Development"},
+          {"columnId": 2, "columnType": "PERCENT_COMPLETE", "value": 0.0},
+          {"columnId": 3, "columnType": "DATE", "value": "2025-02-01"},
+          {"columnId": 4, "columnType": "DATE", "value": "2025-03-31"}
+        ]
+      },
+      {
+        "id": 5,
+        "parentId": 4,
+        "name": "Backend API",
+        "cells": [
+          {"columnId": 1, "value": "Backend API"},
+          {"columnId": 2, "columnType": "PERCENT_COMPLETE", "value": 0.0},
+          {"columnId": 3, "columnType": "DATE", "value": "2025-02-01"},
+          {"columnId": 4, "columnType": "DATE", "value": "2025-02-28"},
+          {"columnId": 5, "columnType": "CONTACT_LIST", "value": "alice@example.com"}
+        ]
+      }
+    ]
+  }
+}

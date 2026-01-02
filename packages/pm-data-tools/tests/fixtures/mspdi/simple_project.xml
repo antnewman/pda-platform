@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project xmlns="http://schemas.microsoft.com/project">
+  <Name>Simple Test Project</Name>
+  <Title>A simple test project</Title>
+  <Manager>John Smith</Manager>
+  <Company>Test Company</Company>
+  <Author>Test Author</Author>
+  <UID>1</UID>
+  <SaveVersion>14</SaveVersion>
+  <StartDate>2025-01-01T09:00:00</StartDate>
+  <FinishDate>2025-01-10T17:00:00</FinishDate>
+  <StatusDate>2025-01-05T12:00:00</StatusDate>
+  <CurrencyCode>GBP</CurrencyCode>
+
+  <Tasks>
+    <Task>
+      <UID>1</UID>
+      <Name>Task 1</Name>
+      <WBS>1</WBS>
+      <OutlineNumber>1</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Start>2025-01-01T09:00:00</Start>
+      <Finish>2025-01-02T17:00:00</Finish>
+      <Duration>PT16H0M0S</Duration>
+      <PercentComplete>50</PercentComplete>
+      <PercentWorkComplete>50</PercentWorkComplete>
+      <Milestone>0</Milestone>
+      <Summary>0</Summary>
+      <Critical>1</Critical>
+      <ConstraintType>0</ConstraintType>
+      <Work>960</Work>
+      <ActualWork>480</ActualWork>
+      <Cost>1000.00</Cost>
+      <ActualCost>500.00</ActualCost>
+      <Priority>500</Priority>
+      <Notes>This is task 1</Notes>
+    </Task>
+
+    <Task>
+      <UID>2</UID>
+      <Name>Task 2</Name>
+      <WBS>2</WBS>
+      <OutlineNumber>2</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Start>2025-01-03T09:00:00</Start>
+      <Finish>2025-01-03T17:00:00</Finish>
+      <Duration>PT8H0M0S</Duration>
+      <PercentComplete>0</PercentComplete>
+      <PercentWorkComplete>0</PercentWorkComplete>
+      <Milestone>0</Milestone>
+      <Summary>0</Summary>
+      <Critical>1</Critical>
+      <ConstraintType>0</ConstraintType>
+      <Work>480</Work>
+      <Cost>500.00</Cost>
+      <Priority>500</Priority>
+      <PredecessorLink>
+        <PredecessorUID>1</PredecessorUID>
+        <Type>1</Type>
+        <LinkLag>0</LinkLag>
+      </PredecessorLink>
+    </Task>
+
+    <Task>
+      <UID>3</UID>
+      <Name>Milestone 1</Name>
+      <WBS>3</WBS>
+      <OutlineNumber>3</OutlineNumber>
+      <OutlineLevel>1</OutlineLevel>
+      <Start>2025-01-03T17:00:00</Start>
+      <Finish>2025-01-03T17:00:00</Finish>
+      <Duration>PT0H0M0S</Duration>
+      <PercentComplete>0</PercentComplete>
+      <PercentWorkComplete>0</PercentWorkComplete>
+      <Milestone>1</Milestone>
+      <Summary>0</Summary>
+      <Critical>1</Critical>
+      <ConstraintType>0</ConstraintType>
+      <Work>0</Work>
+      <Cost>0</Cost>
+      <Priority>500</Priority>
+      <PredecessorLink>
+        <PredecessorUID>2</PredecessorUID>
+        <Type>1</Type>
+        <LinkLag>0</LinkLag>
+      </PredecessorLink>
+    </Task>
+  </Tasks>
+
+  <Resources>
+    <Resource>
+      <UID>1</UID>
+      <Name>Developer 1</Name>
+      <Type>1</Type>
+      <EmailAddress>dev1@test.com</EmailAddress>
+      <MaxUnits>1.0</MaxUnits>
+      <StandardRate>50.00</StandardRate>
+      <CostPerUse>0</CostPerUse>
+    </Resource>
+
+    <Resource>
+      <UID>2</UID>
+      <Name>Developer 2</Name>
+      <Type>1</Type>
+      <EmailAddress>dev2@test.com</EmailAddress>
+      <MaxUnits>1.0</MaxUnits>
+      <StandardRate>60.00</StandardRate>
+      <CostPerUse>0</CostPerUse>
+    </Resource>
+  </Resources>
+
+  <Assignments>
+    <Assignment>
+      <UID>1</UID>
+      <TaskUID>1</TaskUID>
+      <ResourceUID>1</ResourceUID>
+      <Units>1.0</Units>
+      <Work>960</Work>
+      <ActualWork>480</ActualWork>
+      <Cost>800.00</Cost>
+      <ActualCost>400.00</ActualCost>
+    </Assignment>
+
+    <Assignment>
+      <UID>2</UID>
+      <TaskUID>2</TaskUID>
+      <ResourceUID>2</ResourceUID>
+      <Units>1.0</Units>
+      <Work>480</Work>
+      <ActualWork>0</ActualWork>
+      <Cost>480.00</Cost>
+      <ActualCost>0</ActualCost>
+    </Assignment>
+  </Assignments>
+
+  <Calendars>
+    <Calendar>
+      <UID>1</UID>
+      <Name>Standard</Name>
+      <IsBaseCalendar>1</IsBaseCalendar>
+    </Calendar>
+  </Calendars>
+</Project>

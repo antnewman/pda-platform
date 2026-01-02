@@ -1,0 +1,71 @@
+{
+  "data": {
+    "gid": "1234567890",
+    "name": "Product Launch",
+    "sections": [
+      {
+        "gid": "sec1",
+        "name": "Planning",
+        "tasks": [
+          {
+            "gid": "task1",
+            "name": "Market research",
+            "completed": true,
+            "start_on": "2025-01-01",
+            "due_on": "2025-01-10",
+            "assignee": {
+              "gid": "user1",
+              "name": "Alice Johnson"
+            },
+            "subtasks": [
+              {
+                "gid": "subtask1",
+                "name": "Competitor analysis",
+                "completed": true,
+                "start_on": "2025-01-01",
+                "due_on": "2025-01-05"
+              },
+              {
+                "gid": "subtask2",
+                "name": "Customer surveys",
+                "completed": false,
+                "start_on": "2025-01-06",
+                "due_on": "2025-01-10"
+              }
+            ]
+          },
+          {
+            "gid": "task2",
+            "name": "Define product requirements",
+            "completed": false,
+            "start_on": "2025-01-15",
+            "due_on": "2025-01-30",
+            "assignee": {
+              "gid": "user2",
+              "name": "Bob Smith"
+            },
+            "subtasks": []
+          }
+        ]
+      },
+      {
+        "gid": "sec2",
+        "name": "Development",
+        "tasks": [
+          {
+            "gid": "task3",
+            "name": "Build MVP",
+            "completed": false,
+            "start_on": "2025-02-01",
+            "due_on": "2025-03-01",
+            "assignee": {
+              "gid": "user1",
+              "name": "Alice Johnson"
+            },
+            "subtasks": []
+          }
+        ]
+      }
+    ]
+  }
+}

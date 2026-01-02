@@ -1,0 +1,18 @@
+ERMHDR	P6 XER	8.4	Project Management
+%T	PROJECT
+%F	proj_id	proj_short_name	plan_start_date	plan_end_date
+%R	1	Simple Project	2025-01-01	2025-01-31
+%T	TASK
+%F	task_id	task_name	wbs_id	status_code	phys_complete_pct	act_start_date	act_end_date
+%R	100	Task 1		TK_NotStart	0.0
+%R	200	Task 2		TK_Active	50.0	2025-01-01
+%R	300	Task 3		TK_Complete	100.0	2025-01-01	2025-01-15
+%T	TASKPRED
+%F	task_pred_id	task_id	pred_task_id	pred_type
+%R	1	200	100	PR_FS
+%R	2	300	200	PR_FS
+%T	RSRC
+%F	rsrc_id	rsrc_name	rsrc_type
+%R	1	John Doe	RT_Labor
+%R	2	Equipment	RT_Equip
+%R	3	Materials	RT_Mat
