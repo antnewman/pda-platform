@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/PDA-Task-Force/pda-platform/specs/canonical-model/v1.0/project.schema.json",
+  "title": "PM Data Canonical Model",
+  "description": "Universal schema for project management data. Developed by members of the PDA Task Force.",
+  "version": "1.0.0",
+  "type": "object",
+  "properties": {
+    "project": {
+      "$ref": "#/definitions/Project"
+    }
+  },
+  "required": ["project"],
+  "definitions": {
+    "Project": {
+      "type": "object",
+      "description": "Container for all project data",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "start_date": {"type": "string", "format": "date"},
+        "finish_date": {"type": "string", "format": "date"},
+        "status": {"type": "string"},
+        "manager": {"type": "string"},
+        "tasks": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Task"}
+        },
+        "resources": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Resource"}
+        },
+        "calendars": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Calendar"}
+        },
+        "risks": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Risk"}
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "Task": {
+      "type": "object",
+      "description": "Work item with schedule and progress",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "wbs": {"type": "string"},
+        "start_date": {"type": "string", "format": "date"},
+        "finish_date": {"type": "string", "format": "date"},
+        "duration": {"type": "number"},
+        "percent_complete": {"type": "number"},
+        "cost": {"type": "number"},
+        "dependencies": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Dependency"}
+        },
+        "assignments": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Assignment"}
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "Resource": {
+      "type": "object",
+      "description": "People, equipment, or materials",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "type": {"type": "string", "enum": ["work", "material", "cost"]},
+        "standard_rate": {"type": "number"},
+        "overtime_rate": {"type": "number"},
+        "cost_per_use": {"type": "number"}
+      },
+      "required": ["id", "name", "type"]
+    },
+    "Assignment": {
+      "type": "object",
+      "description": "Task-resource allocation",
+      "properties": {
+        "task_id": {"type": "string"},
+        "resource_id": {"type": "string"},
+        "units": {"type": "number"},
+        "work": {"type": "number"},
+        "cost": {"type": "number"}
+      },
+      "required": ["task_id", "resource_id"]
+    },
+    "Dependency": {
+      "type": "object",
+      "description": "Task relationships",
+      "properties": {
+        "predecessor_id": {"type": "string"},
+        "successor_id": {"type": "string"},
+        "type": {"type": "string", "enum": ["FS", "SS", "FF", "SF"]},
+        "lag": {"type": "number"}
+      },
+      "required": ["predecessor_id", "successor_id", "type"]
+    },
+    "Calendar": {
+      "type": "object",
+      "description": "Working time definitions",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "work_days": {"type": "array", "items": {"type": "string"}},
+        "exceptions": {"type": "array"}
+      },
+      "required": ["id", "name"]
+    },
+    "Risk": {
+      "type": "object",
+      "description": "Risk register entries",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "probability": {"type": "number", "minimum": 0, "maximum": 1},
+        "impact": {"type": "number", "minimum": 0, "maximum": 1},
+        "mitigation": {"type": "string"}
+      },
+      "required": ["id", "name", "probability", "impact"]
+    }
+  }
+}
