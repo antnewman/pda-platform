@@ -99,17 +99,34 @@ def create_parser(format_name: str):
         from .schemas.mspdi.parser import MspdiParser
         return MspdiParser()
 
-    elif format_name == 'p6_xer':
-        from .schemas.p6.xer_parser import XerParser
-        return XerParser()
+    elif format_name == 'p6_xer' or format_name == 'p6':
+        from .schemas.p6.xer_parser import XERParser
+        from pathlib import Path
+
+        # XERParser has non-standard interface - needs file_path in __init__
+        # Create wrapper to match standard interface
+        class XERParserWrapper:
+            def __init__(self):
+                self.source_tool = "primavera-p6"
+
+            def parse_file(self, file_path: str | Path) -> Optional[Project]:
+                parser = XERParser(Path(file_path))
+                return parser.parse()
+
+            def parse_string(self, content: str) -> Optional[Project]:
+                # XER parser doesn't support string parsing
+                raise NotImplementedError("XER parser requires file path")
+
+        return XERParserWrapper()
 
     elif format_name == 'nista':
-        from .schemas.nista.parser import NistaParser
-        return NistaParser()
+        from .schemas.nista.parser import NISTAParser
+        return NISTAParser()
 
     elif format_name == 'jira':
         from .schemas.jira.parser import JiraParser
-        return JiraParser()
+        # JiraParser requires project_key, use generic placeholder
+        return JiraParser(project_key="PROJ")
 
     elif format_name == 'monday':
         from .schemas.monday.parser import MondayParser
@@ -124,8 +141,8 @@ def create_parser(format_name: str):
         return SmartsheetParser()
 
     elif format_name == 'gmpp':
-        from .schemas.gmpp.parser import GmppParser
-        return GmppParser()
+        from .schemas.gmpp.parser import GMPPParser
+        return GMPPParser()
 
     else:
         raise ValueError(
