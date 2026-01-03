@@ -32,6 +32,6 @@ class TestPMValidateServer:
     @pytest.mark.asyncio
     async def test_server_exists(self):
         """Server instance is created."""
-        from pm_mcp_servers.pm_validate.server import server
-        assert server is not None
-        assert server.name == "pm-validate"
+        from pm_mcp_servers.pm_validate.server import app
+        assert app is not None
+        assert app.name == "pm-validate"
