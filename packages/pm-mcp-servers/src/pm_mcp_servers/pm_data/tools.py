@@ -132,7 +132,7 @@ async def load_project(arguments: dict, store: ProjectStore = _store) -> dict:
 
         # Calculate critical path length
         critical_tasks = [t for t in tasks if getattr(t, 'is_critical', False)]
-        cp_length = sum(int(t.duration.days) if t.duration else 0 for t in critical_tasks)
+        cp_length = sum(int(t.duration.to_days()) if t.duration else 0 for t in critical_tasks)
 
         return {
             "project_id": project_id,
@@ -212,7 +212,7 @@ async def query_tasks(arguments: dict, store: ProjectStore = _store) -> dict:
         "returned_count": len(paginated_tasks),
         "offset": offset,
         "limit": limit,
-        "tasks": [{"id": t.id, "name": t.name, "status": t.status.value if hasattr(t.status, "value") else str(t.status), "start_date": _serialize_date(t.start_date), "finish_date": _serialize_date(t.finish_date), "duration_days": int(t.duration.days) if t.duration else None, "percent_complete": t.percent_complete, "is_milestone": getattr(t, "is_milestone", False)} for t in paginated_tasks]
+        "tasks": [{"id": t.id, "name": t.name, "status": t.status.value if hasattr(t.status, "value") else str(t.status), "start_date": _serialize_date(t.start_date), "finish_date": _serialize_date(t.finish_date), "duration_days": int(t.duration.to_days()) if t.duration else None, "percent_complete": t.percent_complete, "is_milestone": getattr(t, "is_milestone", False)} for t in paginated_tasks]
     }
 
 
