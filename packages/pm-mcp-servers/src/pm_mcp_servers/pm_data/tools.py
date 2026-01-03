@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -64,7 +64,12 @@ _store = ProjectStore()
 
 def _serialize_date(d: Optional[date]) -> Optional[str]:
     """Safely serialize date to ISO format."""
-    return d.isoformat() if d else None
+    if d is None:
+        return None
+    # Handle both date and datetime
+    if hasattr(d, 'date'):
+        return d.date().isoformat()
+    return d.isoformat()
 
 
 async def load_project(arguments: dict, store: ProjectStore = _store) -> dict:
@@ -126,20 +131,20 @@ async def load_project(arguments: dict, store: ProjectStore = _store) -> dict:
         milestones = [t for t in tasks if getattr(t, 'is_milestone', False)]
 
         # Calculate critical path length
-        critical_tasks = [t for t in tasks if getattr(t, 'total_float', None) == 0]
-        cp_length = sum(t.duration or 0 for t in critical_tasks)
+        critical_tasks = [t for t in tasks if getattr(t, 'is_critical', False)]
+        cp_length = sum(int(t.duration.days) if t.duration else 0 for t in critical_tasks)
 
         return {
             "project_id": project_id,
             "name": project.name,
             "description": project.description,
-            "status": project.status,
+            "status": project.delivery_confidence.value if project.delivery_confidence else None,
             "task_count": len(tasks),
             "resource_count": len(resources),
             "dependency_count": len(dependencies),
             "milestone_count": len(milestones),
             "start_date": _serialize_date(project.start_date),
-            "end_date": _serialize_date(project.end_date),
+            "end_date": _serialize_date(project.finish_date),
             "critical_path_length_days": cp_length,
             "critical_task_count": len(critical_tasks),
             "source_format": format_hint,
@@ -192,9 +197,9 @@ async def query_tasks(arguments: dict, store: ProjectStore = _store) -> dict:
     tasks = project.tasks or []
     matching_tasks = []
     for task in tasks:
-        if "status" in filters and task.status not in filters["status"]:
+        if "status" in filters and task.status.value not in filters["status"] if hasattr(task.status, "value") else task.status not in filters["status"]:
             continue
-        if "is_critical" in filters and getattr(task, "total_float", None) != 0:
+        if "is_critical" in filters and not getattr(task, "is_critical", False):
             continue
         if "is_milestone" in filters and getattr(task, "is_milestone", False) != filters["is_milestone"]:
             continue
@@ -207,7 +212,7 @@ async def query_tasks(arguments: dict, store: ProjectStore = _store) -> dict:
         "returned_count": len(paginated_tasks),
         "offset": offset,
         "limit": limit,
-        "tasks": [{"id": t.id, "name": t.name, "status": t.status, "start_date": _serialize_date(t.start_date), "finish_date": _serialize_date(t.finish_date), "duration_days": t.duration, "percent_complete": t.percent_complete, "is_milestone": getattr(t, "is_milestone", False)} for t in paginated_tasks]
+        "tasks": [{"id": t.id, "name": t.name, "status": t.status.value if hasattr(t.status, "value") else str(t.status), "start_date": _serialize_date(t.start_date), "finish_date": _serialize_date(t.finish_date), "duration_days": int(t.duration.days) if t.duration else None, "percent_complete": t.percent_complete, "is_milestone": getattr(t, "is_milestone", False)} for t in paginated_tasks]
     }
 
 
@@ -221,7 +226,7 @@ async def get_critical_path(arguments: dict, store: ProjectStore = _store) -> di
     if not project:
         return {"error": {"code": "PROJECT_NOT_FOUND", "message": f"Project {project_id} not found"}}
     tasks = project.tasks or []
-    critical_tasks = [t for t in tasks if getattr(t, "total_float", None) == 0]
+    critical_tasks = [t for t in tasks if getattr(t, "is_critical", False)]
     return {
         "project_id": project_id,
         "critical_path_length_days": sum(t.duration or 0 for t in critical_tasks),
@@ -272,16 +277,16 @@ async def get_project_summary(arguments: dict, store: ProjectStore = _store) -> 
         return {"error": {"code": "PROJECT_NOT_FOUND", "message": f"Project {project_id} not found"}}
     tasks = project.tasks or []
     resources = project.resources or []
-    critical_tasks = [t for t in tasks if getattr(t, "total_float", None) == 0]
+    critical_tasks = [t for t in tasks if getattr(t, "is_critical", False)]
     milestones = [t for t in tasks if getattr(t, "is_milestone", False)]
     completed_tasks = [t for t in tasks if t.percent_complete == 100]
     return {
         "project_id": project_id,
         "name": project.name,
         "description": project.description,
-        "status": project.status,
+        "status": project.delivery_confidence.value if project.delivery_confidence else None,
         "start_date": _serialize_date(project.start_date),
-        "end_date": _serialize_date(project.end_date),
+        "end_date": _serialize_date(project.finish_date),
         "task_count": len(tasks),
         "resource_count": len(resources),
         "critical_task_count": len(critical_tasks),
