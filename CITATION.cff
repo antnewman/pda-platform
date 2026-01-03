@@ -1,28 +1,32 @@
 cff-version: 1.2.0
+title: "PDA Platform: AI-Enabled Project Delivery Tools"
 message: "If you use this software, please cite it as below."
 type: software
-title: "PDA Platform: Infrastructure for AI-Enabled Project Delivery"
-version: 1.0.0
-date-released: 2026-01-02
-url: "https://github.com/PDA-Task-Force/pda-platform"
-repository-code: "https://github.com/PDA-Task-Force/pda-platform"
-doi: 10.5281/zenodo.18133574
-license: MIT
 authors:
-  - name: "Members of the PDA Task Force"
+  - family-names: Newman
+    given-names: Ant
+    affiliation: "TortoiseAI / PDA Task Force"
+repository-code: "https://github.com/PDA-Task-Force/pda-platform"
+url: "https://github.com/PDA-Task-Force/pda-platform"
+license: MIT
+version: "0.2.0"
+date-released: "2026-01-03"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.18133574"
+    description: "Zenodo DOI for all versions"
 keywords:
   - project-management
   - artificial-intelligence
-  - data-interoperability
-  - nista
   - mcp
-  - model-context-protocol
+  - nista
+  - uk-government
 abstract: >-
-  Open-source infrastructure for AI-enabled project delivery.
-  Includes universal PM data parsing (pm-data-tools), AI reliability
-  framework (agent-task-planning), and MCP servers for Claude integration.
-  Developed by members of the PDA Task Force to support the NISTA
-  Programme and Project Data Standard trial.
+  Production-ready tools for AI-powered analysis of programme 
+  and project data. Developed to support the UK government's 
+  NISTA Programme and Project Data Standard trial. Includes
+  parsers for 8+ project file formats, MCP servers for AI
+  integration, and agent task planning framework.
 references:
   - type: report
     title: "PDA Task Force White Paper: AI Implementation Barriers in UK Project Delivery"

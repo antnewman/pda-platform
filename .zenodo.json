@@ -1,0 +1,49 @@
+{
+    "title": "PDA Platform: AI-Enabled Project Delivery Tools",
+    "description": "Production-ready tools for AI-powered analysis of programme and project data. Developed to support the UK government's NISTA Programme and Project Data Standard trial. Includes parsers for 8+ project file formats, MCP servers for AI integration, and agent task planning framework.",
+    "creators": [
+        {
+            "name": "Newman, Ant",
+            "affiliation": "TortoiseAI / PDA Task Force"
+        }
+    ],
+    "contributors": [
+        {
+            "name": "PDA Task Force",
+            "type": "ProjectLeader"
+        }
+    ],
+    "keywords": [
+        "project management",
+        "AI",
+        "MCP",
+        "NISTA",
+        "programme data",
+        "UK government",
+        "scheduling",
+        "Microsoft Project",
+        "Primavera P6"
+    ],
+    "license": "MIT",
+    "upload_type": "software",
+    "access_right": "open",
+    "related_identifiers": [
+        {
+            "identifier": "https://github.com/PDA-Task-Force/pda-platform",
+            "relation": "isSupplementTo",
+            "scheme": "url"
+        }
+    ],
+    "subjects": [
+        {
+            "term": "Project Management",
+            "scheme": "url",
+            "identifier": "https://en.wikipedia.org/wiki/Project_management"
+        },
+        {
+            "term": "Artificial Intelligence",
+            "scheme": "url",
+            "identifier": "https://en.wikipedia.org/wiki/Artificial_intelligence"
+        }
+    ]
+}
