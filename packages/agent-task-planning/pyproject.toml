@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-task-planning"
-version = "1.0.0"
+version = "0.2.0"
 description = "AI reliability framework with confidence extraction and outlier mining."
 readme = "README.md"
 license = "MIT"
