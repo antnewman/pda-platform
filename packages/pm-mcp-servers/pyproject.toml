@@ -1,6 +1,6 @@
 [project]
 name = "pm-mcp-servers"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP servers for AI-enabled project management. Enables Claude to interact with PM data."
 readme = "README.md"
 license = {text = "MIT"}
