@@ -4,6 +4,10 @@ MCP servers for AI-enabled project management. Enables Claude to interact with P
 
 Part of the [PDA Platform](https://github.com/PDA-Task-Force/pda-platform).
 
+<!-- mcp-name: io.github.antnewman/pm-data -->
+<!-- mcp-name: io.github.antnewman/pm-validate -->
+<!-- mcp-name: io.github.antnewman/pm-analyse -->
+
 ## Overview
 
 PM MCP Servers provides Model Context Protocol (MCP) servers that enable Claude Desktop and other MCP clients to interact with project management data. Built to support the NISTA Programme and Project Data Standard trial.
