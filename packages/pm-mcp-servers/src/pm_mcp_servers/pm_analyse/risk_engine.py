@@ -6,7 +6,7 @@ confidence scoring and generate evidence-based mitigation strategies.
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .models import (
@@ -588,7 +588,7 @@ class RiskEngine:
             evidence=evidence,
             related_tasks=related_tasks,
             suggested_mitigation=suggested_mitigation,
-            detected_at=datetime.now(datetime.UTC)
+            detected_at=datetime.now(timezone.utc)
         )
         self.risks.append(risk)
 

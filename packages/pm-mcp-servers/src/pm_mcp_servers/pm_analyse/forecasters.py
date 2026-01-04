@@ -117,8 +117,8 @@ class ForecastEngine:
             }
 
         # Calculate percent complete (weighted by duration if available)
-        total_duration = 0
-        completed_duration = 0
+        total_duration: float = 0.0
+        completed_duration: float = 0.0
 
         for task in work_tasks:
             start = getattr(task, 'start_date', None)

@@ -66,7 +66,7 @@ class OutlierDetector:
         Returns:
             List of detected outliers with confidence scores
         """
-        outliers = []
+        outliers: List[Outlier] = []
         tasks = getattr(project, 'tasks', [])
 
         # Filter to work tasks only
@@ -107,7 +107,7 @@ class OutlierDetector:
         stdev_multiplier: float
     ) -> List[Outlier]:
         """Detect tasks with unusual durations."""
-        outliers = []
+        outliers: List[Outlier] = []
 
         # Calculate duration statistics
         durations = []
@@ -165,7 +165,7 @@ class OutlierDetector:
                     id=str(uuid.uuid4()),
                     task_id=task_id,
                     task_name=task_name,
-                    field="duration",
+                    field_name="duration",
                     value=duration,
                     expected_range=(self.DURATION_MIN_DAYS, self.DURATION_MAX_DAYS),
                     deviation_score=min(deviation, 10.0),
@@ -189,7 +189,7 @@ class OutlierDetector:
                     id=str(uuid.uuid4()),
                     task_id=task_id,
                     task_name=task_name,
-                    field="duration",
+                    field_name="duration",
                     value=duration,
                     expected_range=(
                         max(0, avg_duration - stdev_multiplier * std_duration),
@@ -242,7 +242,7 @@ class OutlierDetector:
                         id=str(uuid.uuid4()),
                         task_id=task_id,
                         task_name=task_name,
-                        field="percent_complete",
+                        field_name="percent_complete",
                         value=percent_complete,
                         expected_range=(5, 100),
                         deviation_score=days_started / 7.0,
@@ -263,7 +263,7 @@ class OutlierDetector:
                     id=str(uuid.uuid4()),
                     task_id=task_id,
                     task_name=task_name,
-                    field="percent_complete",
+                    field_name="percent_complete",
                     value=percent_complete,
                     expected_range=(0, 99),
                     deviation_score=5.0,
@@ -303,7 +303,7 @@ class OutlierDetector:
                     id=str(uuid.uuid4()),
                     task_id=task_id,
                     task_name=task_name,
-                    field="total_float",
+                    field_name="total_float",
                     value=total_float,
                     expected_range=(0, excessive_threshold),
                     deviation_score=abs(total_float),
@@ -324,7 +324,7 @@ class OutlierDetector:
                     id=str(uuid.uuid4()),
                     task_id=task_id,
                     task_name=task_name,
-                    field="total_float",
+                    field_name="total_float",
                     value=total_float,
                     expected_range=(0, excessive_threshold),
                     deviation_score=total_float / excessive_threshold,
@@ -372,7 +372,7 @@ class OutlierDetector:
                     id=str(uuid.uuid4()),
                     task_id=task_id,
                     task_name=task_name,
-                    field="dates",
+                    field_name="dates",
                     value=f"Start: {start_date}, Finish: {finish_date}",
                     expected_range=("start <= finish", "start <= finish"),
                     deviation_score=10.0,
@@ -395,7 +395,7 @@ class OutlierDetector:
                         id=str(uuid.uuid4()),
                         task_id=task_id,
                         task_name=task_name,
-                        field="finish_date",
+                        field_name="finish_date",
                         value=finish_date,
                         expected_range=(today, today),
                         deviation_score=days_overdue / 7.0,
@@ -900,7 +900,7 @@ class BaselineComparator:
                         variances.append(BaselineVariance(
                             task_id=task_id,
                             task_name=task_name,
-                            field="finish_date",
+                            field_name="finish_date",
                             baseline_value=baseline_finish,
                             current_value=current_finish,
                             variance=float(variance_days),
@@ -946,7 +946,7 @@ class BaselineComparator:
                         variances.append(BaselineVariance(
                             task_id=task_id,
                             task_name=task_name,
-                            field="duration",
+                            field_name="duration",
                             baseline_value=baseline_days,
                             current_value=current_duration,
                             variance=float(duration_variance),

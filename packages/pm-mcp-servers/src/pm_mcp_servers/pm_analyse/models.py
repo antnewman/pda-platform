@@ -8,7 +8,7 @@ All models include JSON serialization support via to_dict() methods.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -117,7 +117,7 @@ class Risk:
     evidence: List[Evidence] = field(default_factory=list)
     related_tasks: List[str] = field(default_factory=list)
     suggested_mitigation: Optional[str] = None
-    detected_at: datetime = field(default_factory=lambda: datetime.now(datetime.UTC))
+    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self):
         """Validate probability, impact, and confidence are in valid ranges."""
@@ -207,7 +207,7 @@ class Outlier:
     id: str
     task_id: str
     task_name: str
-    field: str
+    field_name: str
     value: Any
     expected_range: tuple[Any, Any]
     deviation_score: float
@@ -227,7 +227,7 @@ class Outlier:
             "id": self.id,
             "task_id": self.task_id,
             "task_name": self.task_name,
-            "field": self.field,
+            "field": self.field_name,
             "value": self.value,
             "expected_range": list(self.expected_range),
             "deviation_score": self.deviation_score,
@@ -322,7 +322,7 @@ class HealthAssessment:
     top_concerns: List[str]
     recommendations: List[str]
     confidence: float
-    assessed_at: datetime = field(default_factory=lambda: datetime.now(datetime.UTC))
+    assessed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __post_init__(self):
         """Validate score and confidence ranges."""
@@ -350,7 +350,7 @@ class BaselineVariance:
 
     task_id: str
     task_name: str
-    field: str
+    field_name: str
     baseline_value: Any
     current_value: Any
     variance: float
@@ -363,7 +363,7 @@ class BaselineVariance:
         return {
             "task_id": self.task_id,
             "task_name": self.task_name,
-            "field": self.field,
+            "field": self.field_name,
             "baseline_value": str(self.baseline_value) if self.baseline_value else None,
             "current_value": str(self.current_value) if self.current_value else None,
             "variance": self.variance,
@@ -394,7 +394,7 @@ class AnalysisMetadata:
 
     def complete(self) -> None:
         """Mark complete and calculate duration."""
-        self.completed_at = datetime.now(datetime.UTC)
+        self.completed_at = datetime.now(timezone.utc)
         delta = self.completed_at - self.started_at
         self.duration_ms = int(delta.total_seconds() * 1000)
 
