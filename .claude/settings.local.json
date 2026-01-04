@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(cat:*)",
+      "Bash(python:*)",
+      "Bash(git push:*)",
+      "Bash(git show:*)",
+      "Bash(git rebase:*)",
+      "Bash(git stash:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(GIT_SEQUENCE_EDITOR=\"sed -i ''s/^pick 7919729/edit 7919729/;s/^pick 821f3ae/edit 821f3ae/;s/^pick 26c7c70/edit 26c7c70/''\" git rebase -i ca803eb)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

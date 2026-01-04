@@ -54,7 +54,7 @@ async def identify_risks(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Create metadata
     analysis_id = str(uuid.uuid4())
-    started_at = datetime.utcnow()
+    started_at = datetime.now(datetime.UTC)
     metadata = AnalysisMetadata(
         analysis_id=analysis_id,
         analysis_type="risk_identification",
@@ -165,7 +165,7 @@ async def forecast_completion(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Create metadata
     analysis_id = str(uuid.uuid4())
-    started_at = datetime.utcnow()
+    started_at = datetime.now(datetime.UTC)
     metadata = AnalysisMetadata(
         analysis_id=analysis_id,
         analysis_type="completion_forecast",
@@ -278,7 +278,7 @@ async def detect_outliers(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Create metadata
     analysis_id = str(uuid.uuid4())
-    started_at = datetime.utcnow()
+    started_at = datetime.now(datetime.UTC)
     metadata = AnalysisMetadata(
         analysis_id=analysis_id,
         analysis_type="outlier_detection",
@@ -395,7 +395,7 @@ async def assess_health(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Create metadata
     analysis_id = str(uuid.uuid4())
-    started_at = datetime.utcnow()
+    started_at = datetime.now(datetime.UTC)
     metadata = AnalysisMetadata(
         analysis_id=analysis_id,
         analysis_type="health_assessment",
@@ -506,7 +506,7 @@ async def suggest_mitigations(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Create metadata
     analysis_id = str(uuid.uuid4())
-    started_at = datetime.utcnow()
+    started_at = datetime.now(datetime.UTC)
     metadata = AnalysisMetadata(
         analysis_id=analysis_id,
         analysis_type="mitigation_generation",
@@ -637,7 +637,7 @@ async def compare_baseline(params: Dict[str, Any]) -> Dict[str, Any]:
     """
     # Create metadata
     analysis_id = str(uuid.uuid4())
-    started_at = datetime.utcnow()
+    started_at = datetime.now(datetime.UTC)
     metadata = AnalysisMetadata(
         analysis_id=analysis_id,
         analysis_type="baseline_comparison",

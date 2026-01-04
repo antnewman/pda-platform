@@ -117,7 +117,7 @@ class Risk:
     evidence: List[Evidence] = field(default_factory=list)
     related_tasks: List[str] = field(default_factory=list)
     suggested_mitigation: Optional[str] = None
-    detected_at: datetime = field(default_factory=lambda: datetime.utcnow())
+    detected_at: datetime = field(default_factory=lambda: datetime.now(datetime.UTC))
 
     def __post_init__(self):
         """Validate probability, impact, and confidence are in valid ranges."""
@@ -322,7 +322,7 @@ class HealthAssessment:
     top_concerns: List[str]
     recommendations: List[str]
     confidence: float
-    assessed_at: datetime = field(default_factory=lambda: datetime.utcnow())
+    assessed_at: datetime = field(default_factory=lambda: datetime.now(datetime.UTC))
 
     def __post_init__(self):
         """Validate score and confidence ranges."""
@@ -394,7 +394,7 @@ class AnalysisMetadata:
 
     def complete(self) -> None:
         """Mark complete and calculate duration."""
-        self.completed_at = datetime.utcnow()
+        self.completed_at = datetime.now(datetime.UTC)
         delta = self.completed_at - self.started_at
         self.duration_ms = int(delta.total_seconds() * 1000)
 

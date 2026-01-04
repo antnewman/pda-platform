@@ -588,7 +588,7 @@ class RiskEngine:
             evidence=evidence,
             related_tasks=related_tasks,
             suggested_mitigation=suggested_mitigation,
-            detected_at=datetime.utcnow()
+            detected_at=datetime.now(datetime.UTC)
         )
         self.risks.append(risk)
 
