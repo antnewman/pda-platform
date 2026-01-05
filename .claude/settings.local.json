@@ -17,7 +17,22 @@
       "Bash(ls:*)",
       "Bash(grep:*)",
       "Bash(find:*)",
-      "Bash(ruff check:*)"
+      "Bash(ruff check:*)",
+      "Bash(git clone:*)",
+      "Bash(curl:*)",
+      "Bash(./mcp-publisher.exe --help)",
+      "Bash(gh repo view:*)",
+      "WebFetch(domain:registry.modelcontextprotocol.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:pypi.org)",
+      "Bash(./mcp-publisher.exe login:*)",
+      "Bash(./mcp-publisher.exe publish pm-data-server.json)",
+      "Bash(./mcp-publisher.exe publish:*)",
+      "Bash(python3:*)",
+      "Bash(printf:*)",
+      "Bash(__NEW_LINE__ echo \"========== COMPLIANCE DOCUMENTATION CREATION SUMMARY ==========\")",
+      "Bash(git check-ignore:*)",
+      "Bash(git ls-files:*)"
     ]
   }
 }
