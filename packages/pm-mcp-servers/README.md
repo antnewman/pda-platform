@@ -19,6 +19,45 @@ PM MCP Servers provides Model Context Protocol (MCP) servers that enable Claude 
 - **pm-analyse-server**: Analyze PM data for insights
 - **pm-benchmark-server**: Benchmark PM AI capabilities
 
+## UK Government Compliance
+
+pda-platform is designed to support compliance with UK government AI and data ethics frameworks.
+
+### Framework Alignment
+
+| Framework | Status |
+|-----------|--------|
+| Model for Responsible Innovation | ✅ Aligned |
+| AI Playbook for UK Government | ✅ Aligned |
+| Data and AI Ethics Framework | ✅ Aligned |
+| NISTA Programme and Project Data Standard | ✅ Supported |
+
+### Key Features
+
+- **Transparency**: MIT open source licence; full code visibility
+- **Accountability**: Evidence trails on all AI outputs
+- **Human Oversight**: Advisory outputs with confidence scoring (0.0-1.0)
+- **Fairness**: No personal or demographic data processing
+- **Safety**: Documented limitations and risk assessment
+
+### Documentation
+
+- [Compliance Statement](docs/compliance/COMPLIANCE_STATEMENT.md)
+- [Model Cards](docs/model-cards/)
+- [Risk Assessment](docs/compliance/RISK_ASSESSMENT.md)
+- [Limitations](docs/LIMITATIONS.md)
+- [ATRS Guidance](docs/guides/ATRS_GUIDANCE.md) (for government adopters)
+- [Governance Guide](docs/guides/GOVERNANCE_GUIDE.md)
+
+### For Government Adopters
+
+pda-platform provides templates and guidance to support your compliance obligations:
+- ATRS completion guidance
+- Governance integration templates
+- Human oversight documentation
+
+See [docs/guides/](docs/guides/) for details.
+
 ## Installation
 
 ```bash
