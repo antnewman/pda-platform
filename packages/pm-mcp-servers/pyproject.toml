@@ -33,6 +33,7 @@ pm-data-server = "pm_mcp_servers.pm_data.server:main"
 pm-validate-server = "pm_mcp_servers.pm_validate.server:main"
 pm-analyse-server = "pm_mcp_servers.pm_analyse.server:main"
 pm-benchmark-server = "pm_mcp_servers.pm_benchmark.server:main"
+pm-nista-server = "pm_mcp_servers.pm_nista.server:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]

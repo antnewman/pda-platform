@@ -39,6 +39,8 @@ dependencies = [
     "click>=8.0.0",
     "pydantic>=2.0.0",
     "python-dateutil>=2.8.0",
+    "httpx[http2]>=0.25.0",  # For NISTA API client
+    "agent-task-planning>=0.2.0",  # For AI narrative generation
 ]
 
 [project.optional-dependencies]

@@ -32,7 +32,11 @@
       "Bash(printf:*)",
       "Bash(__NEW_LINE__ echo \"========== COMPLIANCE DOCUMENTATION CREATION SUMMARY ==========\")",
       "Bash(git check-ignore:*)",
-      "Bash(git ls-files:*)"
+      "Bash(git ls-files:*)",
+      "Bash(GIT_SEQUENCE_EDITOR=\"sed -i ''s/^pick f121c7b/edit f121c7b/''\" git rebase -i b72db88)",
+      "Bash(tree:*)",
+      "Bash(echo:*)",
+      "Bash(git -C \"C:\\\\Users\\\\antjs\\\\pda-platform\" log --oneline -20)"
     ]
   }
 }
