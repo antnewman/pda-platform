@@ -6,6 +6,10 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18133574.svg)](https://doi.org/10.5281/zenodo.18133574)
 [![PyPI - pm-data-tools](https://img.shields.io/pypi/v/pm-data-tools)](https://pypi.org/project/pm-data-tools/)
 
+## Acknowledgement
+
+This project is a fork of https://github.com/PDA-Task-Force/pda-platform originally developed by the PDA Task Force. This fork is maintained independently by https://github.com/antnewman and is not affiliated with the original creators.
+
 ## Overview
 
 The PDA Platform provides the data infrastructure needed for AI to improve project delivery. Built to support the NISTA Programme and Project Data Standard trial.
