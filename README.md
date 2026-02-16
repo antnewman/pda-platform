@@ -1,13 +1,5 @@
 # PDA Platform
 
-> **NOTICE: The PDA Task Force closed on 30 January 2026**
->
-> **This repository is no longer maintained or supported.**
->
-> - The contact email **info@pdataskforce.com** is no longer active
-> - For questions, contact the final Chair: **Donnie MacNicol** at **donnie@teamanimation.co.uk**
-> - A maintained fork is available at: **https://github.com/antnewman/pda-platform**
-
 **Open-source infrastructure for AI-enabled project delivery.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
