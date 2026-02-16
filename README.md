@@ -93,19 +93,31 @@ pda-platform/
 └── examples/        # Usage examples
 ```
 
+## Citation
+
+If you use this platform in your research or work, please cite:
+
+```
+Newman, A. (2026) From Policy to Practice: An Open Framework for AI-Ready Project Delivery.
+London: Tortoise AI. DOI: [to be assigned]
+```
+
 ## License
 
 MIT License - see [LICENSE](LICENSE)
 
 ## Authors
 
-Members of the PDA Task Force
+**Original authors**: Members of the PDA Task Force
+
+**Fork maintained by**: Ant Newman ([github.com/antnewman](https://github.com/antnewman)), CEO and Co-Founder, Tortoise AI
 
 ## Acknowledgments
 
 - PDA Task Force White Paper on AI implementation barriers
 - NISTA Programme and Project Data Standard
 - The open-source community
+- This platform accompanies the publication *From Policy to Practice: An Open Framework for AI-Ready Project Delivery* (Newman, 2026)
 
 ---
 
