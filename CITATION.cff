@@ -5,9 +5,13 @@ type: software
 authors:
   - family-names: Newman
     given-names: Ant
-    affiliation: "TortoiseAI / PDA Task Force"
-repository-code: "https://github.com/PDA-Task-Force/pda-platform"
-url: "https://github.com/PDA-Task-Force/pda-platform"
+    affiliation: "Tortoise AI"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+    role: "Fork maintainer"
+  - name: "PDA Task Force"
+    role: "Original authors"
+repository-code: "https://github.com/antnewman/pda-platform"
+url: "https://github.com/antnewman/pda-platform"
 license: MIT
 version: "0.2.0"
 date-released: "2026-01-03"
@@ -22,11 +26,22 @@ keywords:
   - nista
   - uk-government
 abstract: >-
-  Production-ready tools for AI-powered analysis of programme 
-  and project data. Developed to support the UK government's 
+  Production-ready tools for AI-powered analysis of programme
+  and project data. Developed to support the UK government's
   NISTA Programme and Project Data Standard trial. Includes
   parsers for 8+ project file formats, MCP servers for AI
   integration, and agent task planning framework.
+preferred-citation:
+  type: report
+  title: "From Policy to Practice: An Open Framework for AI-Ready Project Delivery"
+  authors:
+    - family-names: Newman
+      given-names: Ant
+      affiliation: "Tortoise AI"
+  year: 2026
+  publisher: "Tortoise AI"
+  location: "London"
+  doi: "[to be assigned]"
 references:
   - type: report
     title: "PDA Task Force White Paper: AI Implementation Barriers in UK Project Delivery"

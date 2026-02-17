@@ -8,10 +8,12 @@ This project is maintained by the [PDA Task Force](https://github.com/PDATaskFor
 
 ## Feature Contributions
 
-**[Lawrence Rowland](https://github.com/lawrencerowland)** - Feature suggestions that shaped confidence extraction and outlier mining capabilities, including:
+**[Lawrence Rowland](https://github.com/lawrencerowland)** — Requirements and conceptual design for confidence extraction and outlier mining, including:
 - Multi-sample queries with median answer identification and outlier detection
 - Sign-off regimes with verification levels for PM workflows
 - Outlier mining approach for hard problems (referencing the Codex n=32 pattern)
+
+**[Malia Hosseini](https://github.com/maliah1010)** — Implementation of the outlier mining module (`agent_planning/mining/`), including diverse generation strategies, clustering, novelty scoring, and quality filtering.
 
 ## Community
 

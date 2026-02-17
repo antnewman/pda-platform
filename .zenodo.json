@@ -4,7 +4,8 @@
     "creators": [
         {
             "name": "Newman, Ant",
-            "affiliation": "TortoiseAI / PDA Task Force"
+            "affiliation": "Tortoise AI",
+            "orcid": "0000-0000-0000-0000"
         }
     ],
     "contributors": [
@@ -32,6 +33,12 @@
             "identifier": "https://github.com/PDA-Task-Force/pda-platform",
             "relation": "isSupplementTo",
             "scheme": "url"
+        },
+        {
+            "identifier": "[DOI to be assigned]",
+            "relation": "isDocumentedBy",
+            "scheme": "doi",
+            "resource_type": "publication-report"
         }
     ],
     "subjects": [

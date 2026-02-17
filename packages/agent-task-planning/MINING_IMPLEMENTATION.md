@@ -239,6 +239,10 @@ The outlier mining module:
 - The feature is production-ready for exploratory use cases
 - For formal deliverables, use confidence extraction instead
 
-## Author
+## Authors
 
-Implemented based on detailed specification building on the Codex n=32 research insight: for hard problems with low success probability, generating many solutions and mining for breakthroughs outperforms single-shot generation.
+**Requirements**: [Lawrence Rowland](https://github.com/lawrencerowland) (GenAI Integrator / AI Agent Manager) proposed the outlier mining use case — specifically the insight that for hard problems with low probability of success, even incremental gains matter and outliers should be treated as signal rather than noise, referencing the Codex n=32 pattern.
+
+**Implementation**: [Malia Hosseini](https://github.com/maliah1010) (Junior Data Scientist, Tortoise AI) designed and implemented the outlier mining module based on Lawrence's requirements.
+
+Built on the research insight that for hard problems with low success probability, generating many solutions and mining for breakthroughs outperforms single-shot generation.
