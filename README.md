@@ -118,6 +118,8 @@ MIT License - see [LICENSE](LICENSE)
 - NISTA Programme and Project Data Standard
 - The open-source community
 - This platform accompanies the publication *From Policy to Practice: An Open Framework for AI-Ready Project Delivery* (Newman, 2026)
+- [Lawrence Rowland](https://github.com/lawrencerowland) — requirements and conceptual design for the confidence extraction and outlier mining capabilities in `agent-task-planning`
+- [Malia Hosseini](https://github.com/maliah1010) — implementation of the outlier mining module
 
 ---
 
