@@ -23,6 +23,7 @@ from mcp.types import TextContent, Tool
 from .tools import (
     assess_health,
     compare_baseline,
+    detect_narrative_divergence,
     detect_outliers,
     forecast_completion,
     identify_risks,
@@ -225,6 +226,41 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["project_id"]
             }
+        ),
+        Tool(
+            name="detect_narrative_divergence",
+            description=(
+                "Compare a written project narrative against quantitative assurance data to detect "
+                "optimism bias and misrepresentation. Uses AI to identify specific factual claims "
+                "in the narrative and classify each as SUPPORTED, CONTRADICTED, or UNVERIFIABLE "
+                "against stored risks, gate readiness, financial data, benefits, and change pressure. "
+                "Requires ANTHROPIC_API_KEY environment variable."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier — used to look up quantitative data in the AssuranceStore"
+                    },
+                    "narrative_text": {
+                        "type": "string",
+                        "description": "The written project narrative or status update to analyse for divergences"
+                    },
+                    "confidence_threshold": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.7,
+                        "description": "Minimum AI confidence (0.0–1.0) required to include a contradiction in the flags list (default: 0.7)"
+                    },
+                    "db_path": {
+                        "type": "string",
+                        "description": "Optional path to the SQLite AssuranceStore. Defaults to ~/.pm_data_tools/store.db"
+                    }
+                },
+                "required": ["project_id", "narrative_text"]
+            }
         )
     ]
 
@@ -248,12 +284,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             result = await suggest_mitigations(arguments)
         elif name == "compare_baseline":
             result = await compare_baseline(arguments)
+        elif name == "detect_narrative_divergence":
+            result = await detect_narrative_divergence(arguments)
         else:
             result = {
                 "error": {
                     "code": "UNKNOWN_TOOL",
                     "message": f"Unknown tool: {name}",
-                    "suggestion": "Use one of: identify_risks, forecast_completion, detect_outliers, assess_health, suggest_mitigations, compare_baseline"
+                    "suggestion": "Use one of: identify_risks, forecast_completion, detect_outliers, assess_health, suggest_mitigations, compare_baseline, detect_narrative_divergence"
                 }
             }
 

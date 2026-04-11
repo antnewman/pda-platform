@@ -43,10 +43,10 @@ https://pda-platform-i33p.onrender.com/sse
 | Module | Tools | Capability |
 |--------|------:|-----------|
 | pm-data | 6 | Schedule loading, querying, format conversion |
-| pm-analyse | 6 | Risk identification, forecasting, health scoring |
+| pm-analyse | 7 | Risk identification, forecasting, health scoring, narrative divergence |
 | pm-validate | 4 | Structural, semantic, and NISTA validation |
 | pm-nista | 5 | GMPP reporting and NISTA submission |
-| pm-assure | 27 | P1–P14 assurance framework |
+| pm-assure | 28 | P1–P14 assurance framework, cross-module red flag scanner |
 | pm-brm | 10 | Benefits Realisation Management |
 | pm-gate-readiness | 5 | IPA Gate Review readiness scoring |
 | pm-portfolio | 5 | Cross-project health rollup |
@@ -57,7 +57,8 @@ https://pda-platform-i33p.onrender.com/sse
 | pm-resource | 5 | Resource loading, conflicts, and capacity |
 | pm-financial | 5 | Budget baseline, actuals, and EAC forecasting |
 | pm-knowledge | 8 | IPA benchmarks, reference class forecasting, pre-mortem |
-| **Total** | **99** | |
+| pm-simulation | 2 | Monte Carlo schedule simulation, P50/P80/P90 delivery dates |
+| **Total** | **103** | |
 
 ## Documentation
 

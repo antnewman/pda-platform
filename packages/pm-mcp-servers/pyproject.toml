@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pm-mcp-servers"
-version = "1.1.0"
-description = "99 MCP tools across 14 modules for UK government IPA Gate Review assurance. Risk registers, earned value, benefits realisation, gate readiness, portfolio analysis, and IPA benchmark data."
+version = "1.2.0"
+description = "116 MCP tools across 17 modules for UK government IPA Gate Review assurance. Risk registers, Monte Carlo simulation, narrative divergence detection, earned value, benefits realisation, lessons learned, and gate readiness."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -47,7 +47,7 @@ classifiers = [
 
 dependencies = [
     "mcp>=0.9.0",
-    "pm-data-tools>=1.1.0",
+    "pm-data-tools>=1.0.0",
     "uvicorn>=0.20.0",
     "starlette>=0.27.0",
     "anthropic>=0.18.0",
@@ -78,6 +78,12 @@ pm-assure-server = "pm_mcp_servers.pm_assure.server:main"
 pm-knowledge-server = "pm_mcp_servers.pm_knowledge.server:main"
 pda-platform-server = "pm_mcp_servers.pda_platform.server:main"
 pda-platform-remote = "pm_mcp_servers.pda_platform.remote:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "behavioural: marks tests as behavioural/integration tests that verify correct outputs (deselect with '-m not behavioural')",
+]
 
 [tool.ruff]
 line-length = 120

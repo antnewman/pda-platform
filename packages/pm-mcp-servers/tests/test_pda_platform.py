@@ -50,7 +50,7 @@ class TestRegistryModules:
     def test_analyse_registry_loads(self):
         from pm_mcp_servers.pm_analyse.registry import TOOLS, dispatch
 
-        assert len(TOOLS) == 6
+        assert len(TOOLS) == 7
         assert callable(dispatch)
 
     def test_validate_registry_loads(self):
@@ -68,13 +68,13 @@ class TestRegistryModules:
     def test_assure_registry_loads(self):
         from pm_mcp_servers.pm_assure.registry import TOOLS, dispatch
 
-        assert len(TOOLS) == 27
+        assert len(TOOLS) == 28
         assert callable(dispatch)
 
     def test_brm_registry_loads(self):
         from pm_mcp_servers.pm_brm.registry import TOOLS, dispatch
 
-        assert len(TOOLS) == 10
+        assert len(TOOLS) == 12
         assert callable(dispatch)
 
     def test_portfolio_registry_loads(self):
@@ -125,15 +125,60 @@ class TestRegistryModules:
         assert len(TOOLS) == 8
         assert callable(dispatch)
 
+    def test_simulation_registry_loads(self):
+        from pm_mcp_servers.pm_simulation.registry import TOOLS, dispatch
+
+        assert len(TOOLS) == 2
+        assert callable(dispatch)
+
+    def test_lessons_registry_loads(self):
+        from pm_mcp_servers.pm_lessons.registry import TOOLS, dispatch
+
+        assert len(TOOLS) == 5
+        assert callable(dispatch)
+
+    def test_reporting_registry_loads(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS, dispatch
+
+        assert len(TOOLS) == 6
+        assert callable(dispatch)
+
+
+class TestSimulationModule:
+    """Test the pm_simulation module tools and dispatch."""
+
+    EXPECTED_SIMULATION_TOOLS = {
+        "run_schedule_simulation",
+        "get_simulation_results",
+    }
+
+    def test_simulation_tools_present(self):
+        from pm_mcp_servers.pm_simulation.registry import TOOLS
+
+        actual = {t.name for t in TOOLS}
+        assert actual == self.EXPECTED_SIMULATION_TOOLS
+
+    def test_simulation_tools_in_unified(self):
+        from pm_mcp_servers.pda_platform.server import ALL_TOOLS
+
+        actual = {t.name for t in ALL_TOOLS}
+        assert self.EXPECTED_SIMULATION_TOOLS.issubset(actual)
+
+    def test_simulation_tools_have_dispatch(self):
+        from pm_mcp_servers.pda_platform.server import _TOOL_DISPATCH
+
+        for tool_name in self.EXPECTED_SIMULATION_TOOLS:
+            assert tool_name in _TOOL_DISPATCH, f"{tool_name} missing from dispatch"
+
 
 class TestToolAggregation:
     """Test that tool aggregation in the unified server is correct."""
 
     def test_total_tool_count(self):
-        """Unified server has exactly 99 tools (6+6+4+5+27+10+5+2+2+9+5+5+5+8)."""
+        """Unified server has exactly 116 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6)."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
-        assert len(ALL_TOOLS) == 99
+        assert len(ALL_TOOLS) == 116
 
     def test_no_duplicate_tool_names(self):
         """No two tools share the same name across modules."""
@@ -150,14 +195,14 @@ class TestToolAggregation:
         assert len(missing) == 0, f"Tools without dispatch: {missing}"
 
     def test_tool_ordering(self):
-        """Tools appear in module order: data, analyse, validate, nista, assure, brm, portfolio, ev, synthesis, risk, change, resource, financial, knowledge."""
+        """Tools appear in module order: data, analyse, validate, nista, assure, brm, portfolio, ev, synthesis, risk, change, resource, financial, knowledge, simulation, lessons, reporting."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
         names = [t.name for t in ALL_TOOLS]
         # First tool should be from pm-data
         assert names[0] == "load_project"
-        # Last tool should be from pm-knowledge
-        assert names[-1] == "generate_premortem_questions"
+        # Last tool should be from pm-reporting
+        assert names[-1] == "export_sro_dashboard_data"
 
     def test_all_tools_have_valid_schemas(self):
         """Every tool has a name, description, and inputSchema."""
@@ -181,6 +226,7 @@ class TestExpectedTools:
     EXPECTED_ANALYSE_TOOLS = {
         "identify_risks", "forecast_completion", "detect_outliers",
         "assess_health", "suggest_mitigations", "compare_baseline",
+        "detect_narrative_divergence",
     }
 
     EXPECTED_VALIDATE_TOOLS = {
@@ -206,6 +252,7 @@ class TestExpectedTools:
         "create_project_from_profile", "export_dashboard_data",
         "export_dashboard_html", "get_armm_report",
         "assess_gate_readiness", "get_gate_readiness_history", "compare_gate_readiness",
+        "scan_for_red_flags",
     }
 
     EXPECTED_BRM_TOOLS = {
@@ -214,6 +261,7 @@ class TestExpectedTools:
         "forecast_benefit_realisation", "detect_benefits_drift",
         "get_benefits_cascade_impact", "generate_benefits_narrative",
         "assess_benefits_maturity",
+        "forecast_benefits_outturn", "get_benefits_realisation_trajectory",
     }
 
     EXPECTED_PORTFOLIO_TOOLS = {
@@ -258,6 +306,17 @@ class TestExpectedTools:
         "get_failure_patterns", "get_ipa_guidance", "search_knowledge_base",
         "run_reference_class_check", "get_benchmark_percentile",
         "generate_premortem_questions",
+    }
+
+    EXPECTED_LESSONS_TOOLS = {
+        "extract_lessons", "get_project_lessons",
+        "search_project_lessons", "get_systemic_patterns", "generate_lessons_section",
+    }
+
+    EXPECTED_REPORTING_TOOLS = {
+        "generate_gate_review_summary", "generate_sro_dashboard",
+        "generate_board_exception_report", "generate_portfolio_summary",
+        "generate_pir_template", "export_sro_dashboard_data",
     }
 
     def test_data_tools_present(self):
@@ -344,6 +403,18 @@ class TestExpectedTools:
         actual = {t.name for t in TOOLS}
         assert actual == self.EXPECTED_KNOWLEDGE_TOOLS
 
+    def test_lessons_tools_present(self):
+        from pm_mcp_servers.pm_lessons.registry import TOOLS
+
+        actual = {t.name for t in TOOLS}
+        assert actual == self.EXPECTED_LESSONS_TOOLS
+
+    def test_reporting_tools_present(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS
+
+        actual = {t.name for t in TOOLS}
+        assert actual == self.EXPECTED_REPORTING_TOOLS
+
     def test_all_expected_tools_in_unified(self):
         """Every expected tool from every module is in the unified server."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
@@ -364,6 +435,9 @@ class TestExpectedTools:
             | self.EXPECTED_RESOURCE_TOOLS
             | self.EXPECTED_FINANCIAL_TOOLS
             | self.EXPECTED_KNOWLEDGE_TOOLS
+            | TestSimulationModule.EXPECTED_SIMULATION_TOOLS
+            | self.EXPECTED_LESSONS_TOOLS
+            | self.EXPECTED_REPORTING_TOOLS
         )
         assert actual == expected
 
@@ -422,6 +496,122 @@ class TestIndividualServersStillWork:
         from pm_mcp_servers.pm_assure.server import app
 
         assert app.name == "pm-assure-server"
+
+
+class TestLessonsRegistry:
+    """Test that the pm_lessons registry loads and exports correctly."""
+
+    def test_lessons_registry_loads(self):
+        from pm_mcp_servers.pm_lessons.registry import TOOLS, dispatch
+
+        assert len(TOOLS) == 5
+        assert callable(dispatch)
+
+
+class TestLessonsModule:
+    """Test the pm_lessons module tools and dispatch."""
+
+    EXPECTED_LESSONS_TOOLS = {
+        "extract_lessons",
+        "get_project_lessons",
+        "search_project_lessons",
+        "get_systemic_patterns",
+        "generate_lessons_section",
+    }
+
+    def test_lessons_tools_present(self):
+        from pm_mcp_servers.pm_lessons.registry import TOOLS
+
+        actual = {t.name for t in TOOLS}
+        assert actual == self.EXPECTED_LESSONS_TOOLS
+
+    def test_lessons_tools_have_valid_schemas(self):
+        from pm_mcp_servers.pm_lessons.registry import TOOLS
+
+        for tool in TOOLS:
+            assert tool.name, "Tool has no name"
+            assert tool.description, f"Tool {tool.name} has no description"
+            assert tool.inputSchema, f"Tool {tool.name} has no inputSchema"
+            assert tool.inputSchema.get("type") == "object", f"Tool {tool.name} schema is not object type"
+
+    def test_lessons_dispatch_covers_all_tools(self):
+        from pm_mcp_servers.pm_lessons.registry import _DISPATCH, TOOLS
+
+        tool_names = {t.name for t in TOOLS}
+        dispatch_names = set(_DISPATCH.keys())
+        assert tool_names == dispatch_names
+
+
+def test_reporting_registry_loads():
+    """pm_reporting registry exports TOOLS and a callable dispatch."""
+    from pm_mcp_servers.pm_reporting.registry import TOOLS, dispatch
+
+    assert len(TOOLS) == 6
+    assert callable(dispatch)
+
+
+class TestReportingModule:
+    """Test the pm_reporting module tools and dispatch."""
+
+    EXPECTED_REPORTING_TOOLS = {
+        "generate_gate_review_summary",
+        "generate_sro_dashboard",
+        "generate_board_exception_report",
+        "generate_portfolio_summary",
+        "generate_pir_template",
+        "export_sro_dashboard_data",
+    }
+
+    def test_reporting_tools_present(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS
+
+        actual = {t.name for t in TOOLS}
+        assert actual == self.EXPECTED_REPORTING_TOOLS
+
+    def test_reporting_tools_have_valid_schemas(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS
+
+        for tool in TOOLS:
+            assert tool.name, "Tool has no name"
+            assert tool.description, f"Tool {tool.name} has no description"
+            assert tool.inputSchema, f"Tool {tool.name} has no inputSchema"
+            assert tool.inputSchema.get("type") == "object", (
+                f"Tool {tool.name} schema is not object type"
+            )
+
+    def test_reporting_dispatch_covers_all_tools(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS, _DISPATCH
+
+        for tool in TOOLS:
+            assert tool.name in _DISPATCH, f"{tool.name} missing from _DISPATCH"
+
+    def test_reporting_server_instance(self):
+        from pm_mcp_servers.pm_reporting.server import server
+
+        assert server.name == "pm-reporting"
+
+    def test_gate_review_tool_has_required_params(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "generate_gate_review_summary")
+        required = tool.inputSchema.get("required", [])
+        assert "project_id" in required
+        assert "gate_number" in required
+
+    def test_sro_dashboard_tool_has_required_params(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "generate_sro_dashboard")
+        required = tool.inputSchema.get("required", [])
+        assert "project_id" in required
+
+    def test_portfolio_tool_accepts_list(self):
+        from pm_mcp_servers.pm_reporting.registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "generate_portfolio_summary")
+        props = tool.inputSchema.get("properties", {})
+        assert props["project_ids"]["type"] == "array"
+        assert "project_ids" in tool.inputSchema.get("required", [])
 
 
 @pytest.mark.asyncio

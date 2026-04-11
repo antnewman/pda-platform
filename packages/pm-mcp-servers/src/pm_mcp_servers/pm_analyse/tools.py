@@ -733,3 +733,776 @@ async def compare_baseline(params: dict[str, Any]) -> dict[str, Any]:
             },
             "metadata": metadata.to_dict()
         }
+
+
+# ============================================================================
+# Tool 7: Detect Narrative Divergence
+# ============================================================================
+
+
+async def detect_narrative_divergence(params: dict[str, Any]) -> dict[str, Any]:
+    """
+    Detect divergences between a written project narrative and quantitative data.
+
+    Compares a free-text narrative against data stored in the AssuranceStore for the
+    project. Uses the Claude API to identify specific factual claims in the narrative
+    and classify each as SUPPORTED, CONTRADICTED, or UNVERIFIABLE against the data.
+
+    Args:
+        params: {
+            "project_id": str,
+            "narrative_text": str,
+            "confidence_threshold": Optional[float]  # default 0.7
+        }
+
+    Returns:
+        {
+            "project_id": str,
+            "overall_assessment": str,  # ALIGNED / MINOR_DIVERGENCE / DIVERGENT / HIGHLY_DIVERGENT
+            "divergence_score": float,  # 0.0-1.0
+            "claims_assessed": int,
+            "contradictions": int,
+            "flags": List[dict],
+            "supported_claims": List[dict],
+            "unverifiable_claims": List[dict],
+            "data_used": List[str],
+            "data_gaps": List[str]
+        }
+        or {"error": {"code": str, "message": str, "suggestion": str}}
+    """
+    import os
+
+    # ------------------------------------------------------------------ #
+    # 1. Validate inputs                                                   #
+    # ------------------------------------------------------------------ #
+    project_id = params.get("project_id")
+    if not project_id:
+        return {
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "project_id is required",
+                "suggestion": "Provide a valid project_id from load_project",
+            }
+        }
+
+    narrative_text = params.get("narrative_text")
+    if not narrative_text or not narrative_text.strip():
+        return {
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "narrative_text is required and must not be empty",
+                "suggestion": "Provide the project narrative text to analyse",
+            }
+        }
+
+    confidence_threshold = float(params.get("confidence_threshold", 0.7))
+    if not 0.0 <= confidence_threshold <= 1.0:
+        return {
+            "error": {
+                "code": "INVALID_PARAMETER",
+                "message": f"confidence_threshold must be between 0.0 and 1.0, got {confidence_threshold}",
+                "suggestion": "Use a value between 0.0 and 1.0 (default: 0.7)",
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 2. Check API key                                                     #
+    # ------------------------------------------------------------------ #
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {
+            "error": {
+                "code": "API_KEY_MISSING",
+                "message": "ANTHROPIC_API_KEY environment variable is not set",
+                "suggestion": "Set the ANTHROPIC_API_KEY environment variable to use detect_narrative_divergence",
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 3. Gather quantitative data from the AssuranceStore                 #
+    # ------------------------------------------------------------------ #
+    from pathlib import Path
+    from pm_data_tools.db.store import AssuranceStore
+
+    raw_db_path = params.get("db_path")
+    db_path = Path(raw_db_path) if raw_db_path else None
+    store = AssuranceStore(db_path=db_path)
+
+    data_summary: dict[str, Any] = {}
+    data_used: list[str] = []
+    data_gaps: list[str] = []
+
+    # Risks
+    try:
+        risks = store.get_risks(project_id)
+        if risks:
+            open_risks = [r for r in risks if r.get("status") == "OPEN"]
+            high_risks = [r for r in risks if r.get("risk_score", 0) >= 12]
+            data_summary["risks"] = {
+                "total": len(risks),
+                "open": len(open_risks),
+                "high_score_count": len(high_risks),
+                "top_risks": [
+                    {
+                        "title": r.get("title"),
+                        "category": r.get("category"),
+                        "risk_score": r.get("risk_score"),
+                        "likelihood": r.get("likelihood"),
+                        "impact": r.get("impact"),
+                        "status": r.get("status"),
+                    }
+                    for r in risks[:5]
+                ],
+            }
+            data_used.append("risks")
+        else:
+            data_gaps.append("no risk register data")
+    except Exception:
+        data_gaps.append("no risk register data")
+
+    # Gate readiness
+    try:
+        gate_rows = store.get_gate_readiness_history(project_id)
+        if gate_rows:
+            latest_gate = gate_rows[-1]
+            data_summary["gate_readiness"] = {
+                "gate": latest_gate.get("gate"),
+                "readiness": latest_gate.get("readiness"),
+                "composite_score": latest_gate.get("composite_score"),
+                "assessed_at": latest_gate.get("assessed_at"),
+            }
+            data_used.append("gate_readiness")
+        else:
+            data_gaps.append("no gate readiness data")
+    except Exception:
+        data_gaps.append("no gate readiness data")
+
+    # Financial baselines
+    try:
+        financial_baselines = store.get_financial_baselines(project_id)
+        if financial_baselines:
+            latest_baseline = financial_baselines[-1]
+            data_summary["financial_baseline"] = {
+                "label": latest_baseline.get("label"),
+                "total_budget": latest_baseline.get("total_budget"),
+                "created_at": latest_baseline.get("created_at"),
+            }
+            data_used.append("financial_baseline")
+        else:
+            data_gaps.append("no financial baseline data")
+    except Exception:
+        data_gaps.append("no financial baseline data")
+
+    # Financial actuals
+    try:
+        actuals = store.get_financial_actuals(project_id)
+        if actuals:
+            latest_actual = actuals[-1]
+            total_spend = sum(a.get("actual_spend", 0) for a in actuals)
+            data_summary["financial_actuals"] = {
+                "periods_recorded": len(actuals),
+                "total_spend_to_date": total_spend,
+                "latest_period": latest_actual.get("period"),
+                "latest_actual_spend": latest_actual.get("actual_spend"),
+            }
+            data_used.append("financial_actuals")
+        else:
+            data_gaps.append("no financial actuals data")
+    except Exception:
+        data_gaps.append("no financial actuals data")
+
+    # Benefits
+    try:
+        benefits = store.get_benefits(project_id)
+        if benefits:
+            by_status: dict[str, int] = {}
+            for b in benefits:
+                s = b.get("status", "UNKNOWN")
+                by_status[s] = by_status.get(s, 0) + 1
+            data_summary["benefits"] = {
+                "total": len(benefits),
+                "by_status": by_status,
+            }
+            data_used.append("benefits")
+        else:
+            data_gaps.append("no benefits data")
+    except Exception:
+        data_gaps.append("no benefits data")
+
+    # Change requests (change pressure)
+    try:
+        change_requests = store.get_change_requests(project_id)
+        if change_requests:
+            approved = [c for c in change_requests if c.get("status") == "APPROVED"]
+            total_cost_impact = sum(
+                c.get("impact_cost", 0) or 0 for c in change_requests
+            )
+            total_schedule_impact = sum(
+                c.get("impact_schedule_days", 0) or 0 for c in change_requests
+            )
+            data_summary["change_requests"] = {
+                "total": len(change_requests),
+                "approved": len(approved),
+                "total_cost_impact": total_cost_impact,
+                "total_schedule_impact_days": total_schedule_impact,
+            }
+            data_used.append("change_requests")
+        else:
+            data_gaps.append("no change request data")
+    except Exception:
+        data_gaps.append("no change request data")
+
+    # ------------------------------------------------------------------ #
+    # 4. Build Claude prompt                                               #
+    # ------------------------------------------------------------------ #
+    data_text = json.dumps(data_summary, indent=2, default=str)
+
+    system_prompt = (
+        "You are an independent assurance reviewer. "
+        "Your job is to compare a project narrative against quantitative data "
+        "and identify divergences that may indicate optimism bias or misrepresentation. "
+        "Be rigorous and specific. Only flag claims that are explicitly or implicitly "
+        "contradicted by the data. Do not infer data that is not present."
+    )
+
+    user_prompt = f"""You are reviewing a project narrative against quantitative assurance data.
+
+PROJECT NARRATIVE:
+{narrative_text}
+
+QUANTITATIVE DATA FROM ASSURANCE STORE:
+{data_text}
+
+Instructions:
+1. Identify specific factual claims made in the narrative (explicit or implicit).
+2. For each claim, assess it against the quantitative data as one of:
+   - SUPPORTED: the data confirms the claim
+   - CONTRADICTED: the data contradicts the claim
+   - UNVERIFIABLE: no relevant data is available to assess the claim
+3. For any CONTRADICTED claim, assign a severity: HIGH, MEDIUM, or LOW.
+   - HIGH: material misrepresentation (e.g. claiming on-track when SPI < 0.8, claiming budget is fine when spend is near or over)
+   - MEDIUM: concerning divergence but not necessarily misleading (e.g. overstating benefits progress)
+   - LOW: minor overstatement or tone that does not match data
+4. Quote the exact phrase from the narrative and cite the specific evidence from the data.
+5. For each claim, provide your confidence in the assessment (0.0-1.0).
+
+Respond in the following JSON format exactly:
+{{
+  "claims": [
+    {{
+      "claim": "<exact phrase or paraphrase from narrative>",
+      "verdict": "SUPPORTED" | "CONTRADICTED" | "UNVERIFIABLE",
+      "severity": "HIGH" | "MEDIUM" | "LOW" | null,
+      "evidence": "<specific data point or reason>",
+      "confidence": <float 0.0-1.0>
+    }}
+  ]
+}}
+
+Only output the JSON. Do not add any commentary before or after."""
+
+    # ------------------------------------------------------------------ #
+    # 5. Call Claude                                                       #
+    # ------------------------------------------------------------------ #
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw_response = message.content[0].text
+    except Exception as exc:
+        return {
+            "error": {
+                "code": "API_CALL_FAILED",
+                "message": f"Claude API call failed: {exc}",
+                "suggestion": "Check ANTHROPIC_API_KEY is valid and the API is reachable",
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 6. Parse response                                                    #
+    # ------------------------------------------------------------------ #
+    try:
+        # Strip markdown code fences if present
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
+        parsed = json.loads(cleaned)
+        all_claims = parsed.get("claims", [])
+    except Exception:
+        return {
+            "error": {
+                "code": "PARSE_ERROR",
+                "message": "Failed to parse Claude API response as JSON",
+                "suggestion": "This is an internal error — try again or contact support",
+                "raw_response": raw_response[:500],
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 7. Build structured output                                           #
+    # ------------------------------------------------------------------ #
+    _SEVERITY_WEIGHT = {"HIGH": 1.0, "MEDIUM": 0.5, "LOW": 0.25}
+
+    flags: list[dict[str, Any]] = []
+    supported_claims: list[dict[str, Any]] = []
+    unverifiable_claims: list[dict[str, Any]] = []
+
+    for claim_data in all_claims:
+        verdict = claim_data.get("verdict", "UNVERIFIABLE")
+        confidence = float(claim_data.get("confidence", 0.0))
+
+        if verdict == "SUPPORTED":
+            supported_claims.append(
+                {
+                    "claim": claim_data.get("claim", ""),
+                    "evidence": claim_data.get("evidence", ""),
+                }
+            )
+        elif verdict == "CONTRADICTED":
+            # Only include flags that meet the confidence threshold
+            if confidence >= confidence_threshold:
+                flags.append(
+                    {
+                        "claim": claim_data.get("claim", ""),
+                        "verdict": "CONTRADICTED",
+                        "severity": claim_data.get("severity") or "LOW",
+                        "evidence": claim_data.get("evidence", ""),
+                        "confidence": round(confidence, 3),
+                    }
+                )
+        elif verdict == "UNVERIFIABLE":
+            unverifiable_claims.append(
+                {
+                    "claim": claim_data.get("claim", ""),
+                    "reason": claim_data.get("evidence", "No quantitative data available"),
+                }
+            )
+
+    # Divergence score: weighted proportion of assessed claims that are contradicted
+    total_claims = len(all_claims)
+    if total_claims == 0:
+        divergence_score = 0.0
+    else:
+        weighted_contradictions = sum(
+            _SEVERITY_WEIGHT.get(f.get("severity", "LOW"), 0.25) for f in flags
+        )
+        divergence_score = min(1.0, weighted_contradictions / total_claims)
+
+    contradictions = len(flags)
+
+    # Overall assessment
+    high_contradiction_count = sum(1 for f in flags if f.get("severity") == "HIGH")
+    if contradictions == 0:
+        overall_assessment = "ALIGNED"
+    elif high_contradiction_count >= 2:
+        overall_assessment = "HIGHLY_DIVERGENT"
+    elif high_contradiction_count >= 1 or contradictions >= 3:
+        overall_assessment = "DIVERGENT"
+    else:
+        overall_assessment = "MINOR_DIVERGENCE"
+
+    return {
+        "project_id": project_id,
+        "overall_assessment": overall_assessment,
+        "divergence_score": round(divergence_score, 3),
+        "claims_assessed": total_claims,
+        "contradictions": contradictions,
+        "flags": flags,
+        "supported_claims": supported_claims,
+        "unverifiable_claims": unverifiable_claims,
+        "data_used": data_used,
+        "data_gaps": data_gaps,
+    }
+
+# ============================================================================
+# Tool 7: Detect Narrative Divergence
+# ============================================================================
+
+
+async def detect_narrative_divergence(params: dict[str, Any]) -> dict[str, Any]:
+    """
+    Detect divergences between a written project narrative and quantitative data.
+
+    Compares a free-text narrative against data stored in the AssuranceStore for the
+    project. Uses the Claude API to identify specific factual claims in the narrative
+    and classify each as SUPPORTED, CONTRADICTED, or UNVERIFIABLE against the data.
+
+    Args:
+        params: {
+            "project_id": str,
+            "narrative_text": str,
+            "confidence_threshold": Optional[float]  # default 0.7
+        }
+
+    Returns:
+        {
+            "project_id": str,
+            "overall_assessment": str,  # ALIGNED / MINOR_DIVERGENCE / DIVERGENT / HIGHLY_DIVERGENT
+            "divergence_score": float,  # 0.0–1.0
+            "claims_assessed": int,
+            "contradictions": int,
+            "flags": List[dict],
+            "supported_claims": List[dict],
+            "unverifiable_claims": List[dict],
+            "data_used": List[str],
+            "data_gaps": List[str]
+        }
+        or {"error": {"code": str, "message": str, "suggestion": str}}
+    """
+    import os
+
+    # ------------------------------------------------------------------ #
+    # 1. Validate inputs                                                   #
+    # ------------------------------------------------------------------ #
+    project_id = params.get("project_id")
+    if not project_id:
+        return {
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "project_id is required",
+                "suggestion": "Provide a valid project_id from load_project",
+            }
+        }
+
+    narrative_text = params.get("narrative_text")
+    if not narrative_text or not narrative_text.strip():
+        return {
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "narrative_text is required and must not be empty",
+                "suggestion": "Provide the project narrative text to analyse",
+            }
+        }
+
+    confidence_threshold = float(params.get("confidence_threshold", 0.7))
+    if not 0.0 <= confidence_threshold <= 1.0:
+        return {
+            "error": {
+                "code": "INVALID_PARAMETER",
+                "message": f"confidence_threshold must be between 0.0 and 1.0, got {confidence_threshold}",
+                "suggestion": "Use a value between 0.0 and 1.0 (default: 0.7)",
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 2. Check API key                                                     #
+    # ------------------------------------------------------------------ #
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {
+            "error": {
+                "code": "API_KEY_MISSING",
+                "message": "ANTHROPIC_API_KEY environment variable is not set",
+                "suggestion": "Set the ANTHROPIC_API_KEY environment variable to use detect_narrative_divergence",
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 3. Gather quantitative data from the AssuranceStore                 #
+    # ------------------------------------------------------------------ #
+    from pathlib import Path
+    from pm_data_tools.db.store import AssuranceStore
+
+    raw_db_path = params.get("db_path")
+    db_path = Path(raw_db_path) if raw_db_path else None
+    store = AssuranceStore(db_path=db_path)
+
+    data_summary: dict[str, Any] = {}
+    data_used: list[str] = []
+    data_gaps: list[str] = []
+
+    # Risks
+    try:
+        risks = store.get_risks(project_id)
+        if risks:
+            open_risks = [r for r in risks if r.get("status") == "OPEN"]
+            high_risks = [r for r in risks if r.get("risk_score", 0) >= 12]
+            data_summary["risks"] = {
+                "total": len(risks),
+                "open": len(open_risks),
+                "high_score_count": len(high_risks),
+                "top_risks": [
+                    {
+                        "title": r.get("title"),
+                        "category": r.get("category"),
+                        "risk_score": r.get("risk_score"),
+                        "likelihood": r.get("likelihood"),
+                        "impact": r.get("impact"),
+                        "status": r.get("status"),
+                    }
+                    for r in risks[:5]
+                ],
+            }
+            data_used.append("risks")
+        else:
+            data_gaps.append("no risk register data")
+    except Exception:
+        data_gaps.append("no risk register data")
+
+    # Gate readiness
+    try:
+        gate_rows = store.get_gate_readiness_history(project_id)
+        if gate_rows:
+            latest_gate = gate_rows[-1]
+            data_summary["gate_readiness"] = {
+                "gate": latest_gate.get("gate"),
+                "readiness": latest_gate.get("readiness"),
+                "composite_score": latest_gate.get("composite_score"),
+                "assessed_at": latest_gate.get("assessed_at"),
+            }
+            data_used.append("gate_readiness")
+        else:
+            data_gaps.append("no gate readiness data")
+    except Exception:
+        data_gaps.append("no gate readiness data")
+
+    # Financial baselines
+    try:
+        financial_baselines = store.get_financial_baselines(project_id)
+        if financial_baselines:
+            latest_baseline = financial_baselines[-1]
+            data_summary["financial_baseline"] = {
+                "label": latest_baseline.get("label"),
+                "total_budget": latest_baseline.get("total_budget"),
+                "created_at": latest_baseline.get("created_at"),
+            }
+            data_used.append("financial_baseline")
+        else:
+            data_gaps.append("no financial baseline data")
+    except Exception:
+        data_gaps.append("no financial baseline data")
+
+    # Financial actuals
+    try:
+        actuals = store.get_financial_actuals(project_id)
+        if actuals:
+            latest_actual = actuals[-1]
+            total_spend = sum(a.get("actual_spend", 0) for a in actuals)
+            data_summary["financial_actuals"] = {
+                "periods_recorded": len(actuals),
+                "total_spend_to_date": total_spend,
+                "latest_period": latest_actual.get("period"),
+                "latest_actual_spend": latest_actual.get("actual_spend"),
+            }
+            data_used.append("financial_actuals")
+        else:
+            data_gaps.append("no financial actuals data")
+    except Exception:
+        data_gaps.append("no financial actuals data")
+
+    # Benefits
+    try:
+        benefits = store.get_benefits(project_id)
+        if benefits:
+            by_status: dict[str, int] = {}
+            for b in benefits:
+                s = b.get("status", "UNKNOWN")
+                by_status[s] = by_status.get(s, 0) + 1
+            data_summary["benefits"] = {
+                "total": len(benefits),
+                "by_status": by_status,
+            }
+            data_used.append("benefits")
+        else:
+            data_gaps.append("no benefits data")
+    except Exception:
+        data_gaps.append("no benefits data")
+
+    # Change requests (change pressure)
+    try:
+        change_requests = store.get_change_requests(project_id)
+        if change_requests:
+            approved = [c for c in change_requests if c.get("status") == "APPROVED"]
+            total_cost_impact = sum(
+                c.get("impact_cost", 0) or 0 for c in change_requests
+            )
+            total_schedule_impact = sum(
+                c.get("impact_schedule_days", 0) or 0 for c in change_requests
+            )
+            data_summary["change_requests"] = {
+                "total": len(change_requests),
+                "approved": len(approved),
+                "total_cost_impact": total_cost_impact,
+                "total_schedule_impact_days": total_schedule_impact,
+            }
+            data_used.append("change_requests")
+        else:
+            data_gaps.append("no change request data")
+    except Exception:
+        data_gaps.append("no change request data")
+
+    # ------------------------------------------------------------------ #
+    # 4. Build Claude prompt                                               #
+    # ------------------------------------------------------------------ #
+    data_text = json.dumps(data_summary, indent=2, default=str)
+
+    system_prompt = (
+        "You are an independent assurance reviewer. "
+        "Your job is to compare a project narrative against quantitative data "
+        "and identify divergences that may indicate optimism bias or misrepresentation. "
+        "Be rigorous and specific. Only flag claims that are explicitly or implicitly "
+        "contradicted by the data. Do not infer data that is not present."
+    )
+
+    user_prompt = f"""You are reviewing a project narrative against quantitative assurance data.
+
+PROJECT NARRATIVE:
+{narrative_text}
+
+QUANTITATIVE DATA FROM ASSURANCE STORE:
+{data_text}
+
+Instructions:
+1. Identify specific factual claims made in the narrative (explicit or implicit).
+2. For each claim, assess it against the quantitative data as one of:
+   - SUPPORTED: the data confirms the claim
+   - CONTRADICTED: the data contradicts the claim
+   - UNVERIFIABLE: no relevant data is available to assess the claim
+3. For any CONTRADICTED claim, assign a severity: HIGH, MEDIUM, or LOW.
+   - HIGH: material misrepresentation (e.g. claiming on-track when SPI < 0.8, claiming budget is fine when spend is near or over)
+   - MEDIUM: concerning divergence but not necessarily misleading (e.g. overstating benefits progress)
+   - LOW: minor overstatement or tone that does not match data
+4. Quote the exact phrase from the narrative and cite the specific evidence from the data.
+5. For each claim, provide your confidence in the assessment (0.0–1.0).
+
+Respond in the following JSON format exactly:
+{{
+  "claims": [
+    {{
+      "claim": "<exact phrase or paraphrase from narrative>",
+      "verdict": "SUPPORTED" | "CONTRADICTED" | "UNVERIFIABLE",
+      "severity": "HIGH" | "MEDIUM" | "LOW" | null,
+      "evidence": "<specific data point or reason>",
+      "confidence": <float 0.0-1.0>
+    }}
+  ]
+}}
+
+Only output the JSON. Do not add any commentary before or after."""
+
+    # ------------------------------------------------------------------ #
+    # 5. Call Claude                                                       #
+    # ------------------------------------------------------------------ #
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model="claude-3-5-haiku-20241022",
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw_response = message.content[0].text
+    except Exception as exc:
+        return {
+            "error": {
+                "code": "API_CALL_FAILED",
+                "message": f"Claude API call failed: {exc}",
+                "suggestion": "Check ANTHROPIC_API_KEY is valid and the API is reachable",
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 6. Parse response                                                    #
+    # ------------------------------------------------------------------ #
+    try:
+        # Strip markdown code fences if present
+        cleaned = raw_response.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            cleaned = "\n".join(lines[1:-1]) if len(lines) > 2 else cleaned
+        parsed = json.loads(cleaned)
+        all_claims = parsed.get("claims", [])
+    except Exception:
+        return {
+            "error": {
+                "code": "PARSE_ERROR",
+                "message": "Failed to parse Claude API response as JSON",
+                "suggestion": "This is an internal error — try again or contact support",
+                "raw_response": raw_response[:500],
+            }
+        }
+
+    # ------------------------------------------------------------------ #
+    # 7. Build structured output                                           #
+    # ------------------------------------------------------------------ #
+    _SEVERITY_WEIGHT = {"HIGH": 1.0, "MEDIUM": 0.5, "LOW": 0.25}
+
+    flags: list[dict[str, Any]] = []
+    supported_claims: list[dict[str, Any]] = []
+    unverifiable_claims: list[dict[str, Any]] = []
+
+    for claim_data in all_claims:
+        verdict = claim_data.get("verdict", "UNVERIFIABLE")
+        confidence = float(claim_data.get("confidence", 0.0))
+
+        if verdict == "SUPPORTED":
+            supported_claims.append(
+                {
+                    "claim": claim_data.get("claim", ""),
+                    "evidence": claim_data.get("evidence", ""),
+                }
+            )
+        elif verdict == "CONTRADICTED":
+            # Only include flags that meet the confidence threshold
+            if confidence >= confidence_threshold:
+                flags.append(
+                    {
+                        "claim": claim_data.get("claim", ""),
+                        "verdict": "CONTRADICTED",
+                        "severity": claim_data.get("severity") or "LOW",
+                        "evidence": claim_data.get("evidence", ""),
+                        "confidence": round(confidence, 3),
+                    }
+                )
+        elif verdict == "UNVERIFIABLE":
+            unverifiable_claims.append(
+                {
+                    "claim": claim_data.get("claim", ""),
+                    "reason": claim_data.get("evidence", "No quantitative data available"),
+                }
+            )
+
+    # Divergence score: weighted proportion of assessed claims that are contradicted
+    total_claims = len(all_claims)
+    if total_claims == 0:
+        divergence_score = 0.0
+    else:
+        weighted_contradictions = sum(
+            _SEVERITY_WEIGHT.get(f.get("severity", "LOW"), 0.25) for f in flags
+        )
+        divergence_score = min(1.0, weighted_contradictions / total_claims)
+
+    contradictions = len(flags)
+
+    # Overall assessment
+    high_contradiction_count = sum(1 for f in flags if f.get("severity") == "HIGH")
+    if contradictions == 0:
+        overall_assessment = "ALIGNED"
+    elif high_contradiction_count >= 2:
+        overall_assessment = "HIGHLY_DIVERGENT"
+    elif high_contradiction_count >= 1 or contradictions >= 3:
+        overall_assessment = "DIVERGENT"
+    else:
+        overall_assessment = "MINOR_DIVERGENCE"
+
+    return {
+        "project_id": project_id,
+        "overall_assessment": overall_assessment,
+        "divergence_score": round(divergence_score, 3),
+        "claims_assessed": total_claims,
+        "contradictions": contradictions,
+        "flags": flags,
+        "supported_claims": supported_claims,
+        "unverifiable_claims": unverifiable_claims,
+        "data_used": data_used,
+        "data_gaps": data_gaps,
+    }

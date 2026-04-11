@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any
 
@@ -468,7 +468,7 @@ async def _ingest_risk(arguments: dict[str, Any]) -> list[TextContent]:
         likelihood = int(arguments.get("likelihood", 3))
         impact = int(arguments.get("impact", 3))
         risk_score = likelihood * impact
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 
         data = {
             "id": str(uuid.uuid4()),
@@ -716,7 +716,7 @@ async def _ingest_mitigation(arguments: dict[str, Any]) -> list[TextContent]:
                 )
             ]
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         residual_likelihood = arguments.get("residual_likelihood")
         residual_impact = arguments.get("residual_impact")
 
@@ -952,7 +952,7 @@ async def _detect_stale_risks(arguments: dict[str, Any]) -> list[TextContent]:
 
         risks = store.get_risks(project_id=project_id)
 
-        stale_threshold = datetime.utcnow() - timedelta(days=stale_days)
+        stale_threshold = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=stale_days)
 
         not_updated = []
         score_unchanged = []
@@ -965,7 +965,7 @@ async def _detect_stale_risks(arguments: dict[str, Any]) -> list[TextContent]:
             try:
                 updated = datetime.fromisoformat(str(risk["updated_at"]).replace("Z", ""))
                 if updated < stale_threshold:
-                    days_since_update = (datetime.utcnow() - updated).days
+                    days_since_update = (datetime.now(timezone.utc).replace(tzinfo=None) - updated).days
                     not_updated.append({
                         "risk_id": risk["id"],
                         "title": risk["title"],

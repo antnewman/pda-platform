@@ -1114,6 +1114,39 @@ ASSURE_TOOLS: list[Tool] = [
                 "required": ["assessment_id_before", "assessment_id_after"],
             },
         ),
+        Tool(
+            name="scan_for_red_flags",
+            description=(
+                "Cross-module red flag scanner. Queries risks, benefits, gate "
+                "readiness, financials, change requests, and resources in a single "
+                "pass and returns a prioritised alert list. Replaces the need to "
+                "run 10+ individual tools for a full project health picture."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "The project identifier to scan.",
+                    },
+                    "severity_threshold": {
+                        "type": "string",
+                        "enum": ["CRITICAL", "HIGH", "MEDIUM"],
+                        "description": (
+                            "Only return flags at or above this severity level. "
+                            "CRITICAL returns critical only; HIGH returns critical "
+                            "and high; MEDIUM returns all flags. Default: MEDIUM."
+                        ),
+                        "default": "MEDIUM",
+                    },
+                    "db_path": {
+                        "type": "string",
+                        "description": "Optional path to the SQLite store.",
+                    },
+                },
+                "required": ["project_id"],
+            },
+        ),
     ]
 
 
@@ -1179,6 +1212,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _export_dashboard_html(arguments)
     if name == "get_armm_report":
         return await _get_armm_report(arguments)
+    if name == "assess_gate_readiness":
+        return await _assess_gate_readiness(arguments)
+    if name == "get_gate_readiness_history":
+        return await _get_gate_readiness_history(arguments)
+    if name == "compare_gate_readiness":
+        return await _compare_gate_readiness(arguments)
+    if name == "scan_for_red_flags":
+        return await _scan_for_red_flags(arguments)
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
@@ -2975,6 +3016,525 @@ async def _compare_gate_readiness(
             "resolved_blockers": result.resolved_blockers,
             "new_blockers": result.new_blockers,
             "message": result.message,
+        }
+
+        return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+
+
+async def _scan_for_red_flags(arguments: dict[str, Any]) -> list[TextContent]:
+    """Cross-module red flag scanner returning a prioritised alert list."""
+    from datetime import datetime, timezone
+
+    try:
+        from pm_data_tools.db.store import AssuranceStore
+
+        project_id: str = arguments["project_id"]
+        severity_threshold: str = arguments.get("severity_threshold", "MEDIUM")
+        raw_db_path = arguments.get("db_path")
+        db_path = Path(raw_db_path) if raw_db_path else None
+
+        store = AssuranceStore(db_path=db_path)
+
+        # Severity ordering: higher number = higher severity
+        _SEVERITY_ORDER = {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1}
+        threshold_level = _SEVERITY_ORDER.get(severity_threshold, 1)
+
+        flags: list[dict[str, Any]] = []
+        data_gaps: list[str] = []
+        flag_counter = 0
+
+        def _next_flag_id() -> str:
+            nonlocal flag_counter
+            flag_counter += 1
+            return f"RF{flag_counter:03d}"
+
+        def _severity_passes(sev: str) -> bool:
+            return _SEVERITY_ORDER.get(sev, 0) >= threshold_level
+
+        # ------------------------------------------------------------------
+        # 1. RISK checks
+        # ------------------------------------------------------------------
+        try:
+            all_risks = store.get_risks(project_id)
+            open_risks = [r for r in all_risks if r.get("status", "OPEN") == "OPEN"]
+
+            if not all_risks:
+                data_gaps.append("no risks loaded for this project")
+            else:
+                # Check for risks with score >= 8 with no active mitigations
+                critical_unmitigated: list[str] = []
+                for risk in open_risks:
+                    if (risk.get("risk_score") or 0) >= 8:
+                        mitigations = store.get_mitigations(risk["id"])
+                        active_mits = [
+                            m for m in mitigations
+                            if m.get("status") in ("IN_PROGRESS", "COMPLETE", "COMPLETED")
+                        ]
+                        if not active_mits:
+                            critical_unmitigated.append(risk["id"])
+
+                if critical_unmitigated and _severity_passes("CRITICAL"):
+                    max_score = max(
+                        (r.get("risk_score") or 0)
+                        for r in open_risks
+                        if r["id"] in critical_unmitigated
+                    )
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "CRITICAL",
+                        "category": "RISK",
+                        "description": (
+                            f"{len(critical_unmitigated)} critical risk(s) (score >= 8) "
+                            "have no active mitigations"
+                        ),
+                        "evidence": {
+                            "risk_ids": critical_unmitigated,
+                            "max_score": max_score,
+                        },
+                        "recommended_action": (
+                            f"Assign active mitigations to "
+                            f"{', '.join(critical_unmitigated)} before next review"
+                        ),
+                    })
+
+                # More than 3 open risks with score 6-7
+                mid_risks = [r for r in open_risks if 6 <= (r.get("risk_score") or 0) <= 7]
+                if len(mid_risks) > 3 and _severity_passes("HIGH"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "HIGH",
+                        "category": "RISK",
+                        "description": (
+                            f"{len(mid_risks)} open risks have scores in the 6–7 range "
+                            "(elevated but unmanaged cluster)"
+                        ),
+                        "evidence": {
+                            "risk_ids": [r["id"] for r in mid_risks],
+                            "count": len(mid_risks),
+                        },
+                        "recommended_action": (
+                            "Review and consolidate mitigations for elevated risk cluster"
+                        ),
+                    })
+
+                # Risk register not updated in >30 days
+                now = datetime.now(tz=timezone.utc)
+                stale_risks: list[str] = []
+                for risk in open_risks:
+                    updated_at = risk.get("updated_at")
+                    if updated_at:
+                        try:
+                            updated_dt = datetime.fromisoformat(
+                                str(updated_at).replace("Z", "+00:00")
+                            )
+                            if updated_dt.tzinfo is None:
+                                updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                            age_days = (now - updated_dt).days
+                            if age_days > 30:
+                                stale_risks.append(risk["id"])
+                        except (ValueError, TypeError):
+                            pass
+
+                if stale_risks and _severity_passes("HIGH"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "HIGH",
+                        "category": "RISK",
+                        "description": (
+                            f"{len(stale_risks)} open risk(s) have not been updated "
+                            "in over 30 days"
+                        ),
+                        "evidence": {
+                            "risk_ids": stale_risks,
+                            "count": len(stale_risks),
+                        },
+                        "recommended_action": (
+                            "Review and refresh stale risks in the risk register"
+                        ),
+                    })
+
+        except Exception as exc:
+            data_gaps.append(f"risk data unavailable: {exc}")
+
+        # ------------------------------------------------------------------
+        # 2. BENEFITS checks
+        # ------------------------------------------------------------------
+        try:
+            benefits = store.get_benefits(project_id)
+
+            if not benefits:
+                data_gaps.append("no benefits loaded for this project")
+            else:
+                # Benefits with no owner
+                unowned = [b for b in benefits if not b.get("benefits_owner")]
+                if unowned and _severity_passes("HIGH"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "HIGH",
+                        "category": "BENEFITS",
+                        "description": (
+                            f"{len(unowned)} benefit(s) have no benefits owner assigned"
+                        ),
+                        "evidence": {
+                            "benefit_ids": [b["id"] for b in unowned],
+                            "count": len(unowned),
+                        },
+                        "recommended_action": (
+                            "Assign a benefits owner to all unowned benefits"
+                        ),
+                    })
+
+                # Benefits that are AT_RISK or OFF_TRACK
+                at_risk_benefits = [
+                    b for b in benefits
+                    if b.get("status") in ("AT_RISK", "OFF_TRACK")
+                ]
+                if at_risk_benefits and _severity_passes("HIGH"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "HIGH",
+                        "category": "BENEFITS",
+                        "description": (
+                            f"{len(at_risk_benefits)} benefit(s) are AT_RISK or OFF_TRACK"
+                        ),
+                        "evidence": {
+                            "benefit_ids": [b["id"] for b in at_risk_benefits],
+                            "statuses": {
+                                b["id"]: b.get("status") for b in at_risk_benefits
+                            },
+                        },
+                        "recommended_action": (
+                            "Investigate root causes of at-risk benefits and update "
+                            "realisation plans"
+                        ),
+                    })
+
+                # Benefits behind their declared realisation profile
+                now_str = datetime.now(tz=timezone.utc).date().isoformat()
+                behind_realisation: list[str] = []
+                for b in benefits:
+                    target_date = b.get("target_date")
+                    target_value = b.get("target_value")
+                    current_actual = b.get("current_actual_value")
+                    baseline_value = b.get("baseline_value") or 0.0
+                    if (
+                        target_date
+                        and target_value is not None
+                        and current_actual is not None
+                        and target_date <= now_str
+                    ):
+                        # Compute expected fraction based on time elapsed since baseline
+                        baseline_date = b.get("baseline_date") or b.get("created_at", "")[:10]
+                        try:
+                            from datetime import date as _date
+                            td = _date.fromisoformat(str(target_date))
+                            bd = _date.fromisoformat(str(baseline_date)[:10])
+                            today = _date.fromisoformat(now_str)
+                            total_days = (td - bd).days
+                            elapsed_days = (today - bd).days
+                            if total_days > 0:
+                                expected_fraction = min(elapsed_days / total_days, 1.0)
+                                expected_value = (
+                                    baseline_value
+                                    + (float(target_value) - baseline_value)
+                                    * expected_fraction
+                                )
+                                if float(current_actual) < expected_value * 0.9:
+                                    behind_realisation.append(b["id"])
+                        except (ValueError, TypeError):
+                            pass
+
+                if behind_realisation and _severity_passes("HIGH"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "HIGH",
+                        "category": "BENEFITS",
+                        "description": (
+                            f"{len(behind_realisation)} benefit(s) are behind their "
+                            "declared realisation profile"
+                        ),
+                        "evidence": {
+                            "benefit_ids": behind_realisation,
+                            "count": len(behind_realisation),
+                        },
+                        "recommended_action": (
+                            "Review realisation plans and escalate to benefits owner "
+                            "and SRO"
+                        ),
+                    })
+
+        except Exception as exc:
+            data_gaps.append(f"benefits data unavailable: {exc}")
+
+        # ------------------------------------------------------------------
+        # 3. GOVERNANCE / GATE READINESS checks
+        # ------------------------------------------------------------------
+        try:
+            gate_history = store.get_gate_readiness_history(project_id)
+
+            if not gate_history:
+                data_gaps.append("no gate readiness data loaded")
+            else:
+                # Use the most recent assessment
+                latest_gate = sorted(gate_history, key=lambda g: g.get("assessed_at", ""))[-1]
+                composite_score = float(latest_gate.get("composite_score") or 0.0)
+
+                # Parse result_json for outstanding conditions
+                result_json_raw = latest_gate.get("result_json")
+                outstanding_conditions: list[str] = []
+                if result_json_raw:
+                    try:
+                        result_data = json.loads(str(result_json_raw))
+                        blocking = result_data.get("blocking_issues") or []
+                        outstanding_conditions = list(blocking)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                if outstanding_conditions and _severity_passes("CRITICAL"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "CRITICAL",
+                        "category": "GOVERNANCE",
+                        "description": (
+                            f"{len(outstanding_conditions)} outstanding gate condition(s) "
+                            "must be resolved before progression"
+                        ),
+                        "evidence": {
+                            "gate": latest_gate.get("gate"),
+                            "assessed_at": latest_gate.get("assessed_at"),
+                            "blocking_issues": outstanding_conditions,
+                        },
+                        "recommended_action": (
+                            "Address all blocking gate conditions before the next "
+                            "gate review"
+                        ),
+                    })
+
+                # Gate readiness score < 60 (composite_score is 0.0–1.0, threshold 0.60)
+                score_pct = composite_score * 100 if composite_score <= 1.0 else composite_score
+                if score_pct < 60 and _severity_passes("HIGH"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "HIGH",
+                        "category": "GOVERNANCE",
+                        "description": (
+                            f"Gate readiness score is {score_pct:.1f}% — below the 60% "
+                            "minimum threshold"
+                        ),
+                        "evidence": {
+                            "gate": latest_gate.get("gate"),
+                            "composite_score": round(composite_score, 3),
+                            "score_pct": round(score_pct, 1),
+                            "assessed_at": latest_gate.get("assessed_at"),
+                        },
+                        "recommended_action": (
+                            "Run assess_gate_readiness for a full dimension breakdown "
+                            "and improvement priorities"
+                        ),
+                    })
+
+        except Exception as exc:
+            data_gaps.append(f"gate readiness data unavailable: {exc}")
+
+        # ------------------------------------------------------------------
+        # 4. COST / FINANCIAL checks
+        # ------------------------------------------------------------------
+        try:
+            baselines = store.get_financial_baselines(project_id)
+            actuals = store.get_financial_actuals(project_id)
+
+            if not baselines:
+                if _severity_passes("MEDIUM"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "MEDIUM",
+                        "category": "COST",
+                        "description": "No financial baseline has been set for this project",
+                        "evidence": {},
+                        "recommended_action": (
+                            "Set a financial baseline using set_financial_baseline "
+                            "to enable cost variance tracking"
+                        ),
+                    })
+                data_gaps.append("no financial baseline loaded")
+            elif actuals:
+                # Compute total baseline budget vs total actuals
+                total_budget = sum(
+                    float(b.get("total_budget") or 0.0)
+                    for b in baselines
+                    if b.get("cost_category") == "TOTAL"
+                    or not any(
+                        bb.get("cost_category") == "TOTAL" for bb in baselines
+                    )
+                )
+                # Fall back to any baseline if no TOTAL category
+                if total_budget == 0.0:
+                    total_budget = sum(
+                        float(b.get("total_budget") or 0.0) for b in baselines
+                    )
+
+                total_actuals = sum(float(a.get("actual_spend") or 0.0) for a in actuals)
+
+                if total_budget > 0:
+                    variance_pct = ((total_actuals - total_budget) / total_budget) * 100
+                    if variance_pct > 10 and _severity_passes("HIGH"):
+                        flags.append({
+                            "flag_id": _next_flag_id(),
+                            "severity": "HIGH",
+                            "category": "COST",
+                            "description": (
+                                f"Cost variance is {variance_pct:.1f}% unfavourable "
+                                f"(actuals £{total_actuals:,.0f} vs baseline £{total_budget:,.0f})"
+                            ),
+                            "evidence": {
+                                "total_budget": round(total_budget, 2),
+                                "total_actuals": round(total_actuals, 2),
+                                "variance_pct": round(variance_pct, 1),
+                            },
+                            "recommended_action": (
+                                "Investigate cost overrun drivers and review forecast "
+                                "to completion with the finance team"
+                            ),
+                        })
+            else:
+                data_gaps.append("no financial actuals loaded")
+
+        except Exception as exc:
+            data_gaps.append(f"financial data unavailable: {exc}")
+
+        # ------------------------------------------------------------------
+        # 5. CHANGE checks
+        # ------------------------------------------------------------------
+        try:
+            open_changes = store.get_change_requests(project_id, status_filter="SUBMITTED")
+            # Also include UNDER_REVIEW / PENDING statuses if present
+            all_open_changes = store.get_change_requests(project_id)
+            pending_changes = [
+                c for c in all_open_changes
+                if c.get("status") in ("SUBMITTED", "UNDER_REVIEW", "PENDING", "OPEN")
+            ]
+
+            if len(pending_changes) > 5 and _severity_passes("MEDIUM"):
+                flags.append({
+                    "flag_id": _next_flag_id(),
+                    "severity": "MEDIUM",
+                    "category": "CHANGE",
+                    "description": (
+                        f"{len(pending_changes)} open change requests are awaiting decision "
+                        "(change pressure is high)"
+                    ),
+                    "evidence": {
+                        "change_ids": [c["id"] for c in pending_changes],
+                        "count": len(pending_changes),
+                    },
+                    "recommended_action": (
+                        "Prioritise and resolve the change request backlog to reduce "
+                        "delivery uncertainty"
+                    ),
+                })
+            elif not all_open_changes:
+                data_gaps.append("no change request data loaded")
+
+        except Exception as exc:
+            data_gaps.append(f"change request data unavailable: {exc}")
+
+        # ------------------------------------------------------------------
+        # 6. RESOURCE checks
+        # ------------------------------------------------------------------
+        try:
+            resource_plans = store.get_resource_plans(project_id)
+
+            if not resource_plans:
+                data_gaps.append("no resource plan data loaded")
+            else:
+                # Detect critical resources at >100% loading
+                # Group by resource_name, compute loading as planned_days / availability_pct
+                from collections import defaultdict as _defaultdict
+                resource_loading: dict[str, dict[str, Any]] = _defaultdict(
+                    lambda: {"planned_days": 0.0, "availability_pct": 100.0, "periods": 0}
+                )
+                for plan in resource_plans:
+                    rname = str(plan.get("resource_name") or "UNKNOWN")
+                    resource_loading[rname]["planned_days"] += float(
+                        plan.get("planned_days") or 0.0
+                    )
+                    resource_loading[rname]["availability_pct"] = float(
+                        plan.get("availability_pct") or 100.0
+                    )
+                    resource_loading[rname]["periods"] = (
+                        resource_loading[rname]["periods"] + 1
+                    )
+
+                overloaded: list[dict[str, Any]] = []
+                for rname, data in resource_loading.items():
+                    avail = data["availability_pct"]
+                    if avail <= 0:
+                        continue
+                    # loading_pct: ratio of planned relative to full availability
+                    # A resource with availability_pct=80 and planned_days covering
+                    # their full calendar days is at 100%/0.80 = 125% loading.
+                    # Simpler heuristic: flag when planned_days exceed (periods * avail/100 * 5)
+                    # (assuming 5-day working week per period).
+                    periods = data["periods"]
+                    available_days = periods * (avail / 100.0) * 5
+                    if available_days > 0 and data["planned_days"] > available_days:
+                        loading_pct = (data["planned_days"] / available_days) * 100
+                        if loading_pct > 100:
+                            overloaded.append({
+                                "resource_name": rname,
+                                "loading_pct": round(loading_pct, 1),
+                                "planned_days": round(data["planned_days"], 1),
+                                "available_days": round(available_days, 1),
+                            })
+
+                if overloaded and _severity_passes("MEDIUM"):
+                    flags.append({
+                        "flag_id": _next_flag_id(),
+                        "severity": "MEDIUM",
+                        "category": "RESOURCES",
+                        "description": (
+                            f"{len(overloaded)} critical resource(s) are loaded above 100%"
+                        ),
+                        "evidence": {"overloaded_resources": overloaded},
+                        "recommended_action": (
+                            "Review resource allocation and resolve overloading before "
+                            "it impacts delivery"
+                        ),
+                    })
+
+        except Exception as exc:
+            data_gaps.append(f"resource data unavailable: {exc}")
+
+        # ------------------------------------------------------------------
+        # Sort and filter flags by severity
+        # ------------------------------------------------------------------
+        severity_sort = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}
+        flags.sort(key=lambda f: severity_sort.get(f["severity"], 99))
+
+        # Re-assign sequential IDs after sort
+        for idx, flag in enumerate(flags, start=1):
+            flag["flag_id"] = f"RF{idx:03d}"
+
+        # Build summary counts
+        critical_count = sum(1 for f in flags if f["severity"] == "CRITICAL")
+        high_count = sum(1 for f in flags if f["severity"] == "HIGH")
+        medium_count = sum(1 for f in flags if f["severity"] == "MEDIUM")
+
+        output: dict[str, Any] = {
+            "project_id": project_id,
+            "severity_threshold": severity_threshold,
+            "summary": {
+                "total": len(flags),
+                "critical": critical_count,
+                "high": high_count,
+                "medium": medium_count,
+            },
+            "flags": flags,
+            "data_gaps": data_gaps,
+            "scan_timestamp": datetime.now(tz=timezone.utc).isoformat(),
         }
 
         return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]

@@ -17,6 +17,10 @@ Phase 3 tools (AI/predictive):
 Phase 4 tools (maturity & narratives):
   9. generate_benefits_narrative — IPA gate-specific assurance narratives
  10. assess_benefits_maturity — P3M3 maturity scoring
+
+Phase 5 tools (outturn & trajectory):
+ 11. forecast_benefits_outturn — Programme-level outturn forecast with delivery confidence
+ 12. get_benefits_realisation_trajectory — Period-by-period planned vs actual trajectory
 """
 
 from __future__ import annotations
@@ -492,6 +496,80 @@ BRM_TOOLS: list[Tool] = [
             "criteria (Level 1-5). Evaluates data completeness, process maturity, "
             "dependency mapping, and measurement tracking. Returns maturity level "
             "with evidence gaps and improvement recommendations."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": (
+                        "Optional path to the SQLite store. "
+                        "Defaults to ~/.pm_data_tools/store.db"
+                    ),
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
+    # ------------------------------------------------------------------
+    # Phase 5: Outturn & Trajectory
+    # ------------------------------------------------------------------
+    Tool(
+        name="forecast_benefits_outturn",
+        description=(
+            "Forecast programme-level benefits outturn against the business case "
+            "using a delivery confidence factor derived from EV/financial data. "
+            "Returns total forecast outturn, outturn gap, outturn percentage, and "
+            "a RAG rating (GREEN >=95%, AMBER 80-94%, RED <80%). Applies the HMT "
+            "Green Book optimism adjustment (85%) when no performance data exists."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "forecast_date": {
+                    "type": "string",
+                    "description": (
+                        "ISO date to which the forecast applies. "
+                        "Defaults to the end of the current calendar year."
+                    ),
+                },
+                "delivery_confidence_override": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": (
+                        "Override the calculated delivery confidence factor "
+                        "(0.0–1.0). When provided, this value is used directly "
+                        "and the confidence_source will be 'manual_override'."
+                    ),
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": (
+                        "Optional path to the SQLite store. "
+                        "Defaults to ~/.pm_data_tools/store.db"
+                    ),
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
+    Tool(
+        name="get_benefits_realisation_trajectory",
+        description=(
+            "Build a period-by-period planned vs actual cumulative trajectory for "
+            "a project's benefits. Compares declared realisation profiles against "
+            "recorded measurement data. Returns trend direction (AHEAD, ON_TRACK, "
+            "BEHIND) and the period when trajectory first diverged. Returns a clear "
+            "'no measurement data' response when no measurements have been recorded."
         ),
         inputSchema={
             "type": "object",
@@ -1034,6 +1112,442 @@ async def _assess_benefits_maturity(
             "evidence_gaps": assessment.evidence_gaps,
             "recommendations": assessment.recommendations,
             "message": assessment.message,
+        }
+
+        return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+
+
+async def _forecast_benefits_outturn(
+    arguments: dict[str, Any],
+) -> list[TextContent]:
+    """Forecast programme-level benefits outturn using delivery confidence."""
+    import datetime
+
+    try:
+        project_id = arguments["project_id"]
+        store = _get_store(arguments)
+
+        # --- Resolve forecast_date ---
+        raw_forecast_date = arguments.get("forecast_date")
+        if raw_forecast_date:
+            forecast_date = raw_forecast_date
+        else:
+            forecast_date = f"{datetime.date.today().year}-12-31"
+
+        # --- Load benefits ---
+        benefits = store.get_benefits(project_id)
+        if not benefits:
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "project_id": project_id,
+                            "error": "no_benefits_found",
+                            "message": (
+                                f"No benefits registered for project {project_id}. "
+                                "Use ingest_benefit to register benefits first."
+                            ),
+                        },
+                        indent=2,
+                    ),
+                )
+            ]
+
+        # --- Derive delivery confidence ---
+        override = arguments.get("delivery_confidence_override")
+        if override is not None:
+            delivery_confidence = float(override)
+            confidence_source = "manual_override"
+        else:
+            # Try financial data: compare actual spend to baseline
+            baselines = store.get_financial_baselines(project_id)
+            actuals = store.get_financial_actuals(project_id)
+
+            if baselines and actuals:
+                total_baseline = sum(
+                    float(b.get("total_budget") or 0) for b in baselines
+                )
+                total_actual = sum(
+                    float(a.get("actual_spend") or 0) for a in actuals
+                )
+                if total_baseline > 0 and total_actual > 0:
+                    cost_variance_pct = (
+                        (total_actual - total_baseline) / total_baseline
+                    ) * 100
+                    delivery_confidence = max(
+                        0.0, 1.0 - max(0.0, cost_variance_pct / 100)
+                    )
+                    delivery_confidence = min(delivery_confidence, 1.0)
+                    confidence_source = "financial_cost_variance"
+                else:
+                    delivery_confidence = 0.85
+                    confidence_source = "hmt_green_book_default"
+            else:
+                delivery_confidence = 0.85
+                confidence_source = "hmt_green_book_default"
+
+        # --- Per-benefit forecast ---
+        total_business_case_value = 0.0
+        total_realised_to_date = 0.0
+        total_forecast_outturn = 0.0
+        benefit_rows = []
+
+        for b in benefits:
+            benefit_id = b.get("id", "")
+            title = b.get("title", "")
+            owner = b.get("benefits_owner") or b.get("owner_sro") or ""
+
+            # Derive business case value from target_value (primary) or baseline delta
+            target_value = b.get("target_value")
+            baseline_value = b.get("baseline_value")
+            if target_value is not None:
+                bc_value = float(target_value)
+            elif baseline_value is not None:
+                # No target — treat baseline as the declared value
+                bc_value = float(baseline_value)
+            else:
+                bc_value = 0.0
+
+            # Derive realised_to_date from most recent measurement realisation_pct
+            measurements = store.get_benefit_measurements(benefit_id)
+            if measurements and target_value is not None and float(target_value) > 0:
+                latest = measurements[-1]
+                realisation_pct = latest.get("realisation_pct")
+                if realisation_pct is not None:
+                    realised = float(target_value) * (float(realisation_pct) / 100.0)
+                else:
+                    # Fall back to raw value if realisation_pct not stored
+                    realised = float(latest.get("value") or 0)
+            elif measurements:
+                realised = float(measurements[-1].get("value") or 0)
+            else:
+                realised = 0.0
+
+            remaining = max(0.0, bc_value - realised)
+            forecast_remaining = remaining * delivery_confidence
+            forecast_outturn = realised + forecast_remaining
+            forecast_gap = forecast_outturn - bc_value
+
+            # Per-benefit RAG
+            if bc_value > 0:
+                b_outturn_pct = (forecast_outturn / bc_value) * 100
+            else:
+                b_outturn_pct = 100.0
+
+            if b_outturn_pct >= 95:
+                b_rag = "GREEN"
+            elif b_outturn_pct >= 80:
+                b_rag = "AMBER"
+            else:
+                b_rag = "RED"
+
+            total_business_case_value += bc_value
+            total_realised_to_date += realised
+            total_forecast_outturn += forecast_outturn
+
+            benefit_rows.append(
+                {
+                    "benefit_id": benefit_id,
+                    "title": title,
+                    "business_case_value": round(bc_value, 2),
+                    "realised_to_date": round(realised, 2),
+                    "forecast_outturn": round(forecast_outturn, 2),
+                    "forecast_gap": round(forecast_gap, 2),
+                    "rag": b_rag,
+                    "owner": owner,
+                }
+            )
+
+        # --- Programme-level aggregation ---
+        outturn_gap = total_forecast_outturn - total_business_case_value
+        if total_business_case_value > 0:
+            outturn_pct = (total_forecast_outturn / total_business_case_value) * 100
+        else:
+            outturn_pct = 100.0
+
+        if outturn_pct >= 95:
+            overall_rag = "GREEN"
+        elif outturn_pct >= 80:
+            overall_rag = "AMBER"
+        else:
+            overall_rag = "RED"
+
+        # Determine flag
+        flag = "on_track"
+        if outturn_gap < 0:
+            flag = "forecast_below_business_case"
+
+        # Build interpretation text
+        bc_fmt = f"£{total_business_case_value:,.0f}"
+        outturn_fmt = f"£{total_forecast_outturn:,.0f}"
+        interpretation = (
+            f"At current delivery confidence of {delivery_confidence:.0%}, "
+            f"the programme is forecast to realise {outturn_fmt} of the "
+            f"{bc_fmt} business case ({outturn_pct:.1f}%). "
+            f"This is classified {overall_rag}"
+        )
+        if overall_rag == "GREEN":
+            interpretation += " — at or above the Green threshold of 95%."
+        elif overall_rag == "AMBER":
+            interpretation += (
+                " — below the Green threshold of 95% but above the Red threshold of 80%."
+            )
+        else:
+            interpretation += " — below the Red threshold of 80%."
+
+        output = {
+            "project_id": project_id,
+            "forecast_date": forecast_date,
+            "delivery_confidence": round(delivery_confidence, 4),
+            "confidence_source": confidence_source,
+            "summary": {
+                "total_business_case_value": round(total_business_case_value, 2),
+                "total_realised_to_date": round(total_realised_to_date, 2),
+                "total_forecast_outturn": round(total_forecast_outturn, 2),
+                "outturn_gap": round(outturn_gap, 2),
+                "outturn_pct": round(outturn_pct, 1),
+                "rag": overall_rag,
+            },
+            "benefits": benefit_rows,
+            "interpretation": interpretation,
+            "flag": flag,
+        }
+
+        return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+
+
+async def _get_benefits_realisation_trajectory(
+    arguments: dict[str, Any],
+) -> list[TextContent]:
+    """Build a period-by-period planned vs actual cumulative trajectory."""
+    try:
+        project_id = arguments["project_id"]
+        store = _get_store(arguments)
+
+        # --- Load benefits and their declared interim targets ---
+        benefits = store.get_benefits(project_id)
+        if not benefits:
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "project_id": project_id,
+                            "error": "no_benefits_found",
+                            "message": (
+                                f"No benefits registered for project {project_id}. "
+                                "Use ingest_benefit to register benefits first."
+                            ),
+                        },
+                        indent=2,
+                    ),
+                )
+            ]
+
+        benefits_count = len(benefits)
+        total_declared_value = sum(
+            float(b.get("target_value") or 0) for b in benefits
+        )
+
+        # --- Collect all measurements across all benefits ---
+        # Map: period_label -> {"planned": float, "actual": float}
+        # We derive period from measured_at (YYYY-MM-DD -> YYYY-Qx)
+        all_measurements: list[dict[str, Any]] = []
+        has_any_measurements = False
+
+        for b in benefits:
+            benefit_id = b.get("id", "")
+            measurements = store.get_benefit_measurements(benefit_id)
+            if measurements:
+                has_any_measurements = True
+            for m in measurements:
+                all_measurements.append(
+                    {
+                        "benefit_id": benefit_id,
+                        "target_value": float(b.get("target_value") or 0),
+                        "measured_at": m.get("measured_at", ""),
+                        "realisation_pct": m.get("realisation_pct"),
+                        "value": m.get("value"),
+                    }
+                )
+
+        if not has_any_measurements:
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "project_id": project_id,
+                            "benefits_count": benefits_count,
+                            "total_declared_value": round(total_declared_value, 2),
+                            "total_realised": 0,
+                            "realisation_pct": 0.0,
+                            "trajectory": [],
+                            "trend": "NO_DATA",
+                            "behind_since": None,
+                            "message": (
+                                "No measurement data recorded for any benefits on this project. "
+                                "Use track_benefit_measurement to record measurements."
+                            ),
+                        },
+                        indent=2,
+                        default=str,
+                    ),
+                )
+            ]
+
+        def _to_quarter(date_str: str) -> str:
+            """Convert ISO date string to YYYY-Qx label."""
+            if not date_str or len(date_str) < 7:
+                return "UNKNOWN"
+            try:
+                year, month = int(date_str[:4]), int(date_str[5:7])
+                quarter = (month - 1) // 3 + 1
+                return f"{year}-Q{quarter}"
+            except (ValueError, IndexError):
+                return "UNKNOWN"
+
+        # --- Aggregate actual cumulative realised value by quarter ---
+        # For each benefit, we use realisation_pct * target_value or raw value
+        # Group measurements by quarter and take the latest per benefit per quarter
+        from collections import defaultdict
+
+        # latest measurement per (benefit_id, quarter)
+        latest_by_benefit_quarter: dict[tuple[str, str], dict[str, Any]] = {}
+        for m in all_measurements:
+            quarter = _to_quarter(m["measured_at"])
+            key = (m["benefit_id"], quarter)
+            existing = latest_by_benefit_quarter.get(key)
+            if existing is None or m["measured_at"] > existing["measured_at"]:
+                latest_by_benefit_quarter[key] = m
+
+        # Build cumulative actual per quarter
+        # We need to know the realised value at each quarter for each benefit,
+        # then sum across benefits to get total actual per quarter
+        # Sort quarters chronologically
+        all_quarters: set[str] = {k[1] for k in latest_by_benefit_quarter}
+        all_quarters.discard("UNKNOWN")
+        sorted_quarters = sorted(all_quarters)
+
+        # For each quarter, compute total realised across all benefits
+        # by taking the most recent measurement at or before each quarter
+        quarter_actual: dict[str, float] = {}
+        for q in sorted_quarters:
+            total_q = 0.0
+            for b in benefits:
+                bid = b.get("id", "")
+                target_val = float(b.get("target_value") or 0)
+                # Find the latest measurement for this benefit at or before this quarter
+                best_m = None
+                for (mbid, mq), m in latest_by_benefit_quarter.items():
+                    if mbid == bid and mq <= q:
+                        if best_m is None or mq > _to_quarter(best_m["measured_at"]):
+                            best_m = m
+                if best_m is not None:
+                    rp = best_m.get("realisation_pct")
+                    if rp is not None and target_val > 0:
+                        total_q += target_val * (float(rp) / 100.0)
+                    else:
+                        total_q += float(best_m.get("value") or 0)
+            quarter_actual[q] = total_q
+
+        # --- Build planned cumulative from interim_targets across all benefits ---
+        # interim_targets is stored as JSON in the benefits table
+        planned_by_quarter: dict[str, float] = defaultdict(float)
+        has_planned_data = False
+        for b in benefits:
+            interim_raw = b.get("interim_targets")
+            if not interim_raw:
+                continue
+            try:
+                interim_list = (
+                    json.loads(interim_raw)
+                    if isinstance(interim_raw, str)
+                    else interim_raw
+                )
+            except (json.JSONDecodeError, TypeError):
+                interim_list = []
+            for entry in interim_list:
+                date_str = entry.get("date", "")
+                val = entry.get("value")
+                if date_str and val is not None:
+                    q = _to_quarter(date_str)
+                    if q != "UNKNOWN":
+                        planned_by_quarter[q] += float(val)
+                        has_planned_data = True
+
+        # --- Compute cumulative planned (running sum across sorted quarters) ---
+        # Merge planned and actual quarters
+        all_q_set = set(sorted_quarters) | set(planned_by_quarter.keys())
+        all_q_sorted = sorted(all_q_set)
+
+        cum_planned = 0.0
+        cum_actual = 0.0
+        trajectory = []
+        behind_since: str | None = None
+
+        for q in all_q_sorted:
+            period_planned = planned_by_quarter.get(q, 0.0)
+            cum_planned += period_planned
+            cum_actual = quarter_actual.get(q, cum_actual)  # carry forward if no new data
+
+            if has_planned_data and cum_planned > 0:
+                variance = cum_actual - cum_planned
+                variance_pct = (variance / cum_planned) * 100 if cum_planned > 0 else 0.0
+                if variance < 0 and behind_since is None:
+                    behind_since = q
+            else:
+                variance = 0.0
+                variance_pct = 0.0
+
+            trajectory.append(
+                {
+                    "period": q,
+                    "planned_cumulative": round(cum_planned, 2),
+                    "actual_cumulative": round(cum_actual, 2),
+                    "variance": round(variance, 2),
+                    "variance_pct": round(variance_pct, 1),
+                }
+            )
+
+        # --- Determine overall trend ---
+        total_realised = cum_actual
+        if trajectory:
+            last = trajectory[-1]
+            final_variance = last["variance"]
+            if not has_planned_data:
+                trend = "NO_PLANNED_PROFILE"
+            elif abs(final_variance) < 0.01 * max(total_declared_value, 1):
+                trend = "ON_TRACK"
+            elif final_variance > 0:
+                trend = "AHEAD"
+            else:
+                trend = "BEHIND"
+        else:
+            trend = "NO_DATA"
+
+        realisation_pct = (
+            (total_realised / total_declared_value) * 100
+            if total_declared_value > 0
+            else 0.0
+        )
+
+        output = {
+            "project_id": project_id,
+            "benefits_count": benefits_count,
+            "total_declared_value": round(total_declared_value, 2),
+            "total_realised": round(total_realised, 2),
+            "realisation_pct": round(realisation_pct, 1),
+            "trajectory": trajectory,
+            "trend": trend,
+            "behind_since": behind_since,
         }
 
         return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]

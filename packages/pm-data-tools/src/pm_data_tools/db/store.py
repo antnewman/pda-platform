@@ -475,6 +475,41 @@ class AssuranceStore:
                     notes           TEXT,
                     created_at      TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS simulation_runs (
+                    id                   TEXT PRIMARY KEY,
+                    project_id           TEXT NOT NULL,
+                    simulation_type      TEXT NOT NULL,
+                    n_simulations        INTEGER NOT NULL,
+                    p50_days             INTEGER,
+                    p80_days             INTEGER,
+                    p90_days             INTEGER,
+                    p50_date             TEXT,
+                    p80_date             TEXT,
+                    p90_date             TEXT,
+                    mean_duration_days   REAL,
+                    std_deviation_days   REAL,
+                    cost_p50             REAL,
+                    cost_p80             REAL,
+                    cost_p90             REAL,
+                    run_at               TEXT DEFAULT (datetime('now')),
+                    parameters_json      TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS lessons (
+                    id              TEXT PRIMARY KEY,
+                    project_id      TEXT NOT NULL,
+                    document_type   TEXT NOT NULL,
+                    gate            TEXT,
+                    phase           TEXT,
+                    category        TEXT NOT NULL,
+                    title           TEXT NOT NULL,
+                    root_cause      TEXT,
+                    recommendation  TEXT NOT NULL,
+                    severity        TEXT NOT NULL DEFAULT 'MEDIUM',
+                    extracted_at    TEXT DEFAULT (datetime('now')),
+                    source_excerpt  TEXT
+                );
                 """
             )
 
@@ -2532,6 +2567,213 @@ class AssuranceStore:
             cursor = conn.execute(
                 "SELECT * FROM financial_forecasts WHERE project_id = ? ORDER BY forecast_date ASC",
                 (project_id,),
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Simulation runs
+    # ------------------------------------------------------------------
+
+    def upsert_simulation_run(self, run: dict) -> None:
+        """Insert or replace a Monte Carlo simulation run record.
+
+        Args:
+            run: Dict with keys matching the ``simulation_runs`` table columns.
+                Must include ``id``, ``project_id``, ``simulation_type``,
+                ``n_simulations``.  All other columns are optional.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO simulation_runs
+                    (id, project_id, simulation_type, n_simulations,
+                     p50_days, p80_days, p90_days,
+                     p50_date, p80_date, p90_date,
+                     mean_duration_days, std_deviation_days,
+                     cost_p50, cost_p80, cost_p90,
+                     run_at, parameters_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run["id"],
+                    run["project_id"],
+                    run["simulation_type"],
+                    run["n_simulations"],
+                    run.get("p50_days"),
+                    run.get("p80_days"),
+                    run.get("p90_days"),
+                    run.get("p50_date"),
+                    run.get("p80_date"),
+                    run.get("p90_date"),
+                    run.get("mean_duration_days"),
+                    run.get("std_deviation_days"),
+                    run.get("cost_p50"),
+                    run.get("cost_p80"),
+                    run.get("cost_p90"),
+                    run.get("run_at"),
+                    run.get("parameters_json"),
+                ),
+            )
+        logger.debug(
+            "simulation_run_upserted",
+            id=run["id"],
+            project_id=run["project_id"],
+            simulation_type=run["simulation_type"],
+        )
+
+    def get_latest_simulation(
+        self, project_id: str, simulation_type: str
+    ) -> dict | None:
+        """Retrieve the most recent simulation run for a project and type.
+
+        Args:
+            project_id: The project identifier.
+            simulation_type: The simulation type (e.g. ``"schedule"``).
+
+        Returns:
+            A row dict for the latest run, or ``None`` if no run exists.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM simulation_runs
+                WHERE project_id = ? AND simulation_type = ?
+                ORDER BY run_at DESC
+                LIMIT 1
+                """,
+                (project_id, simulation_type),
+            )
+            row = cursor.fetchone()
+        return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Lessons (pm-lessons module)
+    # ------------------------------------------------------------------
+
+    def upsert_project_lesson(self, lesson: dict) -> str:
+        """Insert or replace a lesson record.
+
+        Args:
+            lesson: Dict with keys matching the ``lessons`` table columns.
+                Must include ``id``, ``project_id``, ``document_type``,
+                ``category``, ``title``, ``recommendation``, ``severity``.
+                ``gate``, ``phase``, ``root_cause``, ``source_excerpt`` and
+                ``extracted_at`` are optional.
+
+        Returns:
+            The ``id`` of the upserted lesson.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO lessons
+                    (id, project_id, document_type, gate, phase, category,
+                     title, root_cause, recommendation, severity,
+                     extracted_at, source_excerpt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lesson["id"],
+                    lesson["project_id"],
+                    lesson["document_type"],
+                    lesson.get("gate"),
+                    lesson.get("phase"),
+                    lesson["category"],
+                    lesson["title"],
+                    lesson.get("root_cause"),
+                    lesson["recommendation"],
+                    lesson.get("severity", "MEDIUM"),
+                    lesson.get("extracted_at"),
+                    lesson.get("source_excerpt"),
+                ),
+            )
+        logger.debug(
+            "lesson_persisted",
+            id=lesson["id"],
+            project_id=lesson["project_id"],
+        )
+        return lesson["id"]
+
+    def get_project_lessons(
+        self,
+        project_id: str,
+        category: str | None = None,
+        gate: str | None = None,
+    ) -> list[dict]:
+        """Retrieve all stored lessons for a project with optional filters.
+
+        Args:
+            project_id: The project identifier.
+            category: Optional category filter (e.g. ``"GOVERNANCE"``).
+            gate: Optional gate filter (e.g. ``"GATE_2"``).
+
+        Returns:
+            List of lesson row dicts ordered by extracted_at ascending.
+        """
+        conditions = ["project_id = ?"]
+        params: list = [project_id]
+        if category is not None:
+            conditions.append("category = ?")
+            params.append(category)
+        if gate is not None:
+            conditions.append("gate = ?")
+            params.append(gate)
+
+        where_clause = " AND ".join(conditions)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"SELECT * FROM lessons WHERE {where_clause} ORDER BY extracted_at ASC",
+                params,
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def get_all_lessons(self, category: str | None = None) -> list[dict]:
+        """Retrieve all lessons across all projects with an optional category filter.
+
+        Args:
+            category: Optional category filter (e.g. ``"COMMERCIAL"``).
+
+        Returns:
+            List of lesson row dicts ordered by extracted_at ascending.
+        """
+        if category is not None:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM lessons WHERE category = ? ORDER BY extracted_at ASC",
+                    (category,),
+                )
+                rows = cursor.fetchall()
+        else:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    "SELECT * FROM lessons ORDER BY extracted_at ASC",
+                )
+                rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    def search_lessons(self, query: str) -> list[dict]:
+        """Keyword search across title, root_cause, and recommendation fields.
+
+        Args:
+            query: Free-text search string.  Simple ``LIKE`` matching is used;
+                no vector/semantic search is performed.
+
+        Returns:
+            List of matching lesson row dicts ordered by extracted_at ascending.
+        """
+        pattern = f"%{query}%"
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM lessons
+                WHERE title LIKE ?
+                   OR root_cause LIKE ?
+                   OR recommendation LIKE ?
+                ORDER BY extracted_at ASC
+                """,
+                (pattern, pattern, pattern),
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]

@@ -1,14 +1,14 @@
 # Claude Code Instructions — PDA Platform
 
 ## Project Overview
-The PDA Platform is a Python monorepo providing AI-powered project delivery assurance for UK government. It exposes 99 MCP tools across 14 modules via a unified server, deployable locally or via Render.
+The PDA Platform is a Python monorepo providing AI-powered project delivery assurance for UK government. It exposes 116 MCP tools across 17 modules via a unified server, deployable locally or via Render.
 
 ## Repo Structure
 ```
 packages/
   pda-platform/          Meta-package (pip install pda-platform)
   pm-data-tools/         Core library: parsers, validators, AssuranceStore (SQLite)
-  pm-mcp-servers/        14 MCP modules, 99 tools
+  pm-mcp-servers/        17 MCP modules, 116 tools
   agent-task-planning/   AI reliability: confidence extraction, outlier mining
 docs/                    Practitioner guides and technical references
 .github/workflows/       publish.yml — PyPI publish on version tag
@@ -29,7 +29,7 @@ docs/                    Practitioner guides and technical references
 
 ## Package Versions — Keep in Sync
 
-All four packages are versioned together. Current version: **1.1.0**
+All four packages are versioned together. Current version: **1.2.0**
 
 | Package | PyPI | pyproject.toml location |
 |---|---|---|
@@ -53,20 +53,22 @@ Use semantic versioning:
 ### How to release to PyPI
 
 1. Bump all four `version = "x.y.z"` fields in their respective `pyproject.toml` files
-2. Update inter-package dependency pins to match (e.g. `pm-data-tools>=1.1.0`)
+2. Update inter-package dependency pins to `>=` the **previous published version** (NOT the new version — see warning below)
 3. Commit: `chore: bump versions to x.y.z`
 4. Merge dev → main via PR
 5. Tag on main: `git tag vx.y.z && git push antnewman vx.y.z`
 6. The GitHub Actions workflow (`.github/workflows/publish.yml`) builds and publishes all four packages automatically
+7. After publish completes, update the inter-package pins to `>=x.y.z` in a follow-up commit if needed
 
 ### What NOT to do
 - Do not publish manually with `twine upload` — use the workflow
 - Do not bump only one package — all four must stay in sync
 - Do not tag on `dev` — always tag on `main` after the PR is merged
+- **Do not pin inter-package deps to the NEW version before it is published** — Render builds from source but pip resolves deps from PyPI. If `pm-data-tools` requires `agent-task-planning>=1.1.0` but 1.1.0 is not yet on PyPI, Render will fail. Keep pins at the last confirmed published version until the new version is live on PyPI.
 
 ## MCP Tool Count — Keep in Sync
 
-The tool count (currently **99**) appears in multiple places. When adding new tools, update ALL of these:
+The tool count (currently **116**) appears in multiple places. When adding new tools, update ALL of these:
 
 | File | What to update |
 |---|---|
@@ -135,10 +137,10 @@ Current documentation status (update this when docs are written):
 | pm-data | ✅ | ✅ v2.0 | n/a | ✅ |
 | pm-analyse | ✅ | ✅ v2.0 | ✅ | ✅ |
 | pm-validate | ✅ | ✅ v2.0 | n/a | partial |
-| pm-nista | ❌ needed | ✅ v2.0 | n/a | partial |
+| pm-nista | ✅ | ✅ v2.0 | n/a | partial |
 | pm-assure | ✅ | ✅ v2.0 | ✅ | ✅ |
-| pm-brm | ✅ | ✅ v2.0 | ⚠️ needed | ✅ |
-| pm-gate-readiness | ✅ | ✅ v2.0 | ⚠️ needed | ✅ |
+| pm-brm | ✅ | ✅ v2.0 | ✅ | ✅ |
+| pm-gate-readiness | ✅ | ✅ v2.0 | ✅ | ✅ |
 | pm-portfolio | ✅ | ✅ v2.0 | n/a | ✅ |
 | pm-ev | ✅ | ✅ v2.0 | ✅ | partial |
 | pm-synthesis | ✅ | ✅ v2.0 | ✅ | partial |

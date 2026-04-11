@@ -8,13 +8,15 @@
 [![PyPI - pm-data-tools](https://img.shields.io/pypi/v/pm-data-tools)](https://pypi.org/project/pm-data-tools/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18133574.svg)](https://doi.org/10.5281/zenodo.18133574)
 
-**99 tools · 14 modules · Production-deployed · Published on PyPI**
+**116 tools · 17 modules · Production-deployed · Published on PyPI**
 
 ---
 
-PDA Platform gives Claude and other MCP-compatible AI assistants the tools to perform rigorous, evidence-based project delivery assurance aligned to IPA Gate Reviews (Gates 0–5), HM Treasury Green Book appraisal, and GMPP reporting standards. It is the only open-source MCP platform specifically designed for Senior Responsible Owners, Project Managers, Independent Assurance Reviewers, and Portfolio Managers working in UK government major project delivery.
+PDA Platform gives Claude and other MCP-compatible AI assistants **116 structured tools** to perform rigorous, evidence-based project delivery assurance aligned to IPA Gate Reviews (Gates 0–5), HM Treasury Green Book appraisal, and GMPP reporting standards. It is the only open-source MCP platform specifically designed for Senior Responsible Owners, Project Managers, Independent Assurance Reviewers, and Portfolio Managers working in UK government major project delivery.
 
-Connect Claude to the platform and ask it to conduct a full gate readiness assessment, generate a Delivery Confidence Assessment, run an Earned Value analysis, detect stale risk registers, benchmark cost estimates against IPA historical data, or produce board-ready health summaries — all grounded in real project data, IPA methodology, and pre-loaded government benchmark statistics.
+Think of it as a **semantic layer for project data**: it ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through a structured API that AI can reason about directly — without parsing raw XML or making things up.
+
+Connect Claude to the platform and ask it to conduct a full gate readiness assessment, scan across all delivery dimensions simultaneously for critical red flags, benchmark cost estimates against real IPA historical data, run Monte Carlo simulations, detect narrative optimism bias, or produce board-ready exception reports — all grounded in your project data, IPA methodology, and evidence from comparable government programmes.
 
 **Live demo:** `https://pda-platform-i33p.onrender.com/sse` — connect any MCP client in under 60 seconds, no installation required.
 
@@ -65,16 +67,31 @@ See the full **[Connection Guide](docs/connection-guide.md)** for Claude.ai, Cla
 
 ---
 
-## What Claude can do with 99 tools
+## Start here: scan for red flags
+
+The fastest way to get value from the platform is a single tool call:
+
+```
+scan_for_red_flags — project_id: "PROJ-001"
+```
+
+This queries risk registers, benefits status, gate conditions, cost performance, change pressure, and resource conflicts **simultaneously** and returns a prioritised CRITICAL / HIGH / MEDIUM alert list with evidence trails. One call replaces six separate queries. Use it at the start of every assurance session to focus attention where it matters most.
+
+---
+
+## What Claude can do with 116 tools
 
 Once connected, Claude can answer questions like:
 
-- *"Run a full IPA Gate 3 readiness assessment for Project Alpha and produce a Delivery Confidence Assessment."*
+- *"Scan Project Alpha for red flags across all delivery dimensions and tell me what needs immediate SRO attention."*
+- *"Run a full IPA Gate 3 readiness assessment and produce a Delivery Confidence Assessment."*
 - *"Our cost estimate is £42m. Is that realistic for an IT programme of this scale compared to similar government projects?"*
+- *"The project narrative says delivery is on track. Is the quantitative data consistent with that?"*
 - *"Which risks on Project Beta are accelerating? Has the risk register been actively maintained?"*
-- *"Produce a board-ready summary of portfolio health for the investment committee."*
-- *"Generate pre-mortem challenge questions for the Gate 3 review panel."*
-- *"Run an Earned Value analysis and tell me if this project's cost trajectory is sustainable."*
+- *"Run a Monte Carlo simulation and give me P50, P80, and P90 delivery dates."*
+- *"Produce an IPA-format Gate Review Summary document ready for submission."*
+- *"Extract lessons from this gate review report and identify patterns recurring across my portfolio."*
+- *"Produce a board exception report — board language, escalation items only, no jargon."*
 - *"Which of my six projects needs the most urgent assurance intervention this quarter?"*
 
 ---
@@ -92,21 +109,27 @@ Once connected, Claude can answer questions like:
 - **Pre-mortem question generation** — structured challenge questions for Gates 0–5, targeting optimism bias, groupthink, and known cognitive failure modes
 - **ARMM maturity assessment** — 251-criterion AI readiness assessment across 4 dimensions and 28 topics
 - **8 schedule data format parsers** — MSPDI, Primavera P6, Jira, Monday, Asana, Smartsheet, GMPP, NISTA
+- **Cross-module red flag scanner** — `scan_for_red_flags` queries risk, benefits, gate conditions, cost, change, and resources simultaneously; returns prioritised CRITICAL/HIGH/MEDIUM alerts with evidence trails — the fastest way to identify where assurance attention is needed
+- **Narrative divergence detection** — `detect_narrative_divergence` compares written project narrative against quantitative store data, classifying claims as SUPPORTED/CONTRADICTED/UNVERIFIABLE; directly targets optimism bias and groupthink
+- **Monte Carlo schedule simulation** — probabilistic P50/P80/P90 delivery dates using PERT distributions, optionally calibrated against risk register likelihood/impact scores
+- **AI lessons extraction** — `extract_lessons` parses gate review reports and PIRs to extract structured lessons (category, severity, root cause, recommendation); `get_systemic_patterns` identifies recurring issues across the portfolio corpus
+- **IPA-format governance document generation** — gate review summaries, SRO dashboards, board exception reports, portfolio summaries, and PIR templates; pre-populated from store data, written in IPA language
+- **Universal Dashboard Specification output** — `export_sro_dashboard_data` exports delivery metrics as static JSON for the UDS Renderer; visualise DCA rating, schedule confidence, cost variance, risks, and benefits in a browser dashboard
 - **AI-powered narrative generation** — multi-sample consensus with confidence scoring, IPA-format executive summaries
 - **Agent Readiness Maturity Model** — governance framework for AI deployment on major projects
 
 ---
 
-## 14 MCP Modules
+## 17 MCP Modules
 
 | Module | Tools | What it does |
 |--------|------:|-------------|
 | pm-data | 6 | Project loading, querying, format conversion across 8 PM data formats |
-| pm-analyse | 6 | AI risk analysis, schedule forecasting, health assessment, baseline comparison |
+| pm-analyse | 7 | AI risk analysis, schedule forecasting, health assessment, narrative divergence detection |
 | pm-validate | 4 | Structural, semantic, and NISTA compliance validation |
 | pm-nista | 5 | GMPP quarterly reporting, NISTA integration, longitudinal compliance |
-| pm-assure | 27 | Assurance lifecycle: artefact currency, gate readiness, ARMM, assumption drift, workflow engine |
-| pm-brm | 10 | Benefits Realisation Management: register, measurement, dependency network, drift, maturity |
+| pm-assure | 28 | Assurance lifecycle: artefact currency, gate readiness, ARMM, assumption drift, workflow engine, **cross-module red flag scanning** |
+| pm-brm | 12 | Benefits Realisation Management: register, measurement, dependency network, drift, maturity, outturn forecasting, trajectory tracking |
 | pm-portfolio | 5 | Cross-project portfolio aggregation, health rollup, systemic risk detection |
 | pm-ev | 2 | Earned Value metrics (SPI/CPI/EAC/TCPI) and HTML S-curve dashboard |
 | pm-synthesis | 2 | AI-generated executive health summaries and cross-project comparison |
@@ -115,7 +138,10 @@ Once connected, Claude can answer questions like:
 | pm-resource | 5 | Resource loading, conflict detection, portfolio capacity planning |
 | pm-financial | 5 | Budget baseline, period actuals, EAC forecasting, spend profile |
 | pm-knowledge | 8 | IPA benchmarks, failure patterns, guidance references, reference class checks, pre-mortem questions |
-| **Total** | **99** | One unified endpoint · One connection |
+| pm-simulation | 2 | Monte Carlo schedule simulation with PERT distributions, P50/P80/P90 delivery dates |
+| pm-lessons | 5 | AI extraction of lessons from gate reviews/PIRs, cross-project keyword search, systemic pattern analysis |
+| pm-reporting | 6 | IPA-format gate review summaries, SRO dashboards, board exception reports, portfolio summaries, PIR templates, UDS export |
+| **Total** | **116** | One unified endpoint · One connection |
 
 ---
 
@@ -136,7 +162,7 @@ PDA Platform
 ├── packages/
 │   ├── pm-data-tools/          Core library: parsers, validators, AssuranceStore (SQLite)
 │   ├── pda-platform/           Meta-package: pip install pda-platform installs everything
-│   ├── pm-mcp-servers/         14 MCP modules, 99 tools for AI integration
+│   ├── pm-mcp-servers/         17 MCP modules, 116 tools for AI integration
 │   └── agent-task-planning/    AI reliability: confidence extraction, outlier mining
 ├── docs/                       Practitioner guides, prompt library, technical references
 ├── specs/                      Canonical data model, benchmarks, synthetic data specs
@@ -175,13 +201,15 @@ PDA Platform
 | [Data](docs/data-for-practitioners.md) | pm-data |
 | [Analysis](docs/analyse-for-practitioners.md) | pm-analyse |
 | [Validation](docs/validate-for-practitioners.md) | pm-validate |
+| [Lessons Learned](docs/lessons-for-practitioners.md) | pm-lessons |
+| [Reporting](docs/reporting-for-practitioners.md) | pm-reporting |
 
 ### Technical references
 
 | Document | Description |
 |----------|-------------|
 | [Architecture Overview](docs/architecture-overview.md) | System architecture and component interactions |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Parameter-level reference for all 99 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Parameter-level reference for all 116 tools |
 | [Connection Guide](docs/connection-guide.md) | Connect Claude.ai, Claude Desktop, ChatGPT, Gemini |
 | [Getting Started](docs/getting-started.md) | Installation, configuration, and first steps |
 | [Data Model Reference](docs/data-model-reference.md) | Canonical data model and entity relationships |
@@ -213,7 +241,7 @@ pip install -e packages/pm-mcp-servers
 
 **Run tests:**
 ```bash
-cd packages/pm-mcp-servers && python -m pytest   # 48 tests, 99 tools
+cd packages/pm-mcp-servers && python -m pytest   # 68 tests, 116 tools
 cd packages/pm-data-tools && python -m pytest
 ```
 

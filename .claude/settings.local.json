@@ -82,7 +82,8 @@
       "Bash(go version:*)",
       "Bash(wsl --status)",
       "Bash(wsl bash:*)",
-      "Bash(gh pr create --title 'feat: 99 tools, pm-knowledge module, MCP registry, and full documentation overhaul' --body ':*)"
+      "Bash(gh pr create --title 'feat: 99 tools, pm-knowledge module, MCP registry, and full documentation overhaul' --body ':*)",
+      "Bash(gh pr:*)"
     ]
   }
 }
