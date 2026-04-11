@@ -29,7 +29,7 @@ docs/                    Practitioner guides and technical references
 
 ## Package Versions — Keep in Sync
 
-All four packages are versioned together. Current version: **1.0.0**
+All four packages are versioned together. Current version: **1.1.0**
 
 | Package | PyPI | pyproject.toml location |
 |---|---|---|

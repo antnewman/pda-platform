@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pda-platform"
-version = "1.0.0"
+version = "1.1.0"
 description = "99 MCP tools for UK government IPA Gate Review assurance. Connects Claude and other AI assistants to schedule analysis, risk registers, earned value, benefits realisation, and gate readiness."
 readme = "README.md"
 license = {text = "MIT"}
@@ -50,9 +50,9 @@ classifiers = [
 # Installing pda-platform pulls in everything needed to run the
 # unified 99-tool MCP server.
 dependencies = [
-    "agent-task-planning>=0.2.0",
-    "pm-data-tools>=0.2.0",
-    "pm-mcp-servers>=0.3.0",
+    "agent-task-planning>=1.1.0",
+    "pm-data-tools>=1.1.0",
+    "pm-mcp-servers>=1.1.0",
 ]
 
 [project.optional-dependencies]

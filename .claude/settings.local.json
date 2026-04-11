@@ -63,7 +63,26 @@
       "WebFetch(domain:www.reinforcementproductsonline.co.uk)",
       "Bash(2)",
       "Bash(git fetch:*)",
-      "Bash(git merge:*)"
+      "Bash(git merge:*)",
+      "Bash(Get-Item \"C:\\\\Users\\\\antjs\\\\Projects\\\\pda-platform\\\\docs\\\\mcp-tools-reference.md\", \"C:\\\\Users\\\\antjs\\\\Projects\\\\pda-platform\\\\docs\\\\analyse-for-practitioners.md\", \"C:\\\\Users\\\\antjs\\\\Projects\\\\pda-platform\\\\docs\\\\validate-for-practitioners.md\")",
+      "Bash(Select-Object Name, Length)",
+      "Bash(gh pr create --title 'Release v1.0.0 — 89 tools across 13 modules' --body ':*)",
+      "Bash(gh run:*)",
+      "Bash(git tag:*)",
+      "Bash(wc -l C:/Users/antjs/Projects/pda-platform/docs/prompts/*.md)",
+      "Bash(sed -n '578,640p' C:/Users/antjs/Projects/pda-platform/packages/pm-mcp-servers/src/pm_mcp_servers/pm_assure/server.py)",
+      "Bash(sed -n '997,1060p' C:/Users/antjs/Projects/pda-platform/packages/pm-mcp-servers/src/pm_mcp_servers/pm_assure/server.py)",
+      "Bash(gh repo:*)",
+      "WebFetch(domain:modelcontextprotocol.info)",
+      "WebFetch(domain:support.claude.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:static.modelcontextprotocol.io)",
+      "Bash(mcpr --version)",
+      "Bash(npx @modelcontextprotocol/registry-cli --version)",
+      "Bash(go version:*)",
+      "Bash(wsl --status)",
+      "Bash(wsl bash:*)",
+      "Bash(gh pr create --title 'feat: 99 tools, pm-knowledge module, MCP registry, and full documentation overhaul' --body ':*)"
     ]
   }
 }

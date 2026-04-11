@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pm-data-tools"
-version = "1.0.0"
+version = "1.1.0"
 description = "Parser, validator, and SQLite assurance store for UK government project data. Supports NISTA, GMPP, MSPDI, Primavera P6, and Jira. Backbone of the PDA Platform MCP server."
 readme = "README.md"
 license = {text = "MIT"}
@@ -52,7 +52,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dateutil>=2.8.0",
     "httpx[http2]>=0.25.0",
-    "agent-task-planning>=0.2.0",
+    "agent-task-planning>=1.1.0",
 ]
 
 [project.optional-dependencies]
