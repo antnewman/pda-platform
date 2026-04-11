@@ -52,7 +52,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dateutil>=2.8.0",
     "httpx[http2]>=0.25.0",
-    "agent-task-planning>=1.0.0",
+    "agent-task-planning>=0.2.0",
 ]
 
 [project.optional-dependencies]
