@@ -393,6 +393,17 @@ class AssuranceStore:
                     FOREIGN KEY (risk_id) REFERENCES risks(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS risk_score_history (
+                    id              TEXT PRIMARY KEY,
+                    risk_id         TEXT NOT NULL,
+                    project_id      TEXT NOT NULL,
+                    likelihood      INTEGER NOT NULL,
+                    impact          INTEGER NOT NULL,
+                    risk_score      INTEGER NOT NULL,
+                    recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY (risk_id) REFERENCES risks(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS change_requests (
                     id                  TEXT PRIMARY KEY,
                     project_id          TEXT NOT NULL,
@@ -2128,6 +2139,7 @@ class AssuranceStore:
 
     def upsert_risk(self, data: dict[str, object]) -> None:
         """Insert or replace a risk record."""
+        import uuid as _uuid
         with self._connect() as conn:
             conn.execute(
                 """
@@ -2145,6 +2157,22 @@ class AssuranceStore:
                     data.get("owner"), data.get("target_date"),
                     data.get("proximity"), data.get("notes"),
                     data["created_at"], data["updated_at"],
+                ),
+            )
+            history_id = str(_uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO risk_score_history
+                    (id, risk_id, project_id, likelihood, impact, risk_score, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                (
+                    history_id,
+                    data["id"],
+                    data["project_id"],
+                    data.get("likelihood", 3),
+                    data.get("impact", 3),
+                    data.get("risk_score", 9),
                 ),
             )
         logger.debug("risk_upserted", id=data["id"], project_id=data["project_id"])
@@ -2231,6 +2259,34 @@ class AssuranceStore:
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    def get_risk_score_history(self, risk_id: str) -> list[dict]:
+        """Return score history for a specific risk, oldest first."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM risk_score_history
+                WHERE risk_id = ?
+                ORDER BY recorded_at ASC
+                """,
+                (risk_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_project_risk_history(self, project_id: str) -> list[dict]:
+        """Return score history for all risks in a project, oldest first."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT rsh.*, r.title as risk_title, r.category as risk_category
+                FROM risk_score_history rsh
+                JOIN risks r ON r.id = rsh.risk_id
+                WHERE rsh.project_id = ?
+                ORDER BY rsh.recorded_at ASC
+                """,
+                (project_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     # ------------------------------------------------------------------
     # Change Control Log (P17)

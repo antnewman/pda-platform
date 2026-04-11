@@ -1,6 +1,6 @@
 """PDA Platform — unified MCP server.
 
-Aggregates all thirteen PDA MCP servers into a single endpoint:
+Aggregates all fourteen PDA MCP servers into a single endpoint:
 
   pm-data        ( 6 tools)   Project data loading, querying, conversion
   pm-analyse     ( 6 tools)   AI-powered risk, forecasting, health assessment
@@ -11,12 +11,13 @@ Aggregates all thirteen PDA MCP servers into a single endpoint:
   pm-portfolio   ( 5 tools)   Cross-project portfolio aggregation and health rollup
   pm-ev          ( 2 tools)   Earned Value metrics and HTML dashboard generation
   pm-synthesis   ( 2 tools)   AI-generated executive health summaries and comparisons
-  pm-risk        ( 7 tools)   Risk register, heat map, mitigations, and portfolio risk rollup
+  pm-risk        ( 9 tools)   Risk register, heat map, mitigations, velocity tracking, stale register detection
   pm-change      ( 5 tools)   Change control log, impact analysis, and change pressure detection
   pm-resource    ( 5 tools)   Resource loading, conflict detection, capacity planning
   pm-financial   ( 5 tools)   Budget baseline, actuals, cost performance, EAC forecasting
+  pm-knowledge   ( 8 tools)   IPA benchmarks, failure patterns, guidance, reference class checks, pre-mortem questions
 
-Total: 89 tools accessible through one connection.
+Total: 99 tools accessible through one connection.
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ from ..pm_change.registry import TOOLS as CHANGE_TOOLS
 from ..pm_change.registry import dispatch as change_dispatch
 from ..pm_financial.registry import TOOLS as FINANCIAL_TOOLS
 from ..pm_financial.registry import dispatch as financial_dispatch
+from ..pm_knowledge.registry import TOOLS as KNOWLEDGE_TOOLS
+from ..pm_knowledge.registry import dispatch as knowledge_dispatch
 from ..pm_ev.registry import TOOLS as EV_TOOLS
 from ..pm_ev.registry import dispatch as ev_dispatch
 from ..pm_nista.registry import TOOLS as NISTA_TOOLS
@@ -77,6 +80,7 @@ for _tools, _dispatch_fn in [
     (CHANGE_TOOLS, change_dispatch),
     (RESOURCE_TOOLS, resource_dispatch),
     (FINANCIAL_TOOLS, financial_dispatch),
+    (KNOWLEDGE_TOOLS, knowledge_dispatch),
 ]:
     for _tool in _tools:
         _TOOL_DISPATCH[_tool.name] = _dispatch_fn
@@ -84,13 +88,13 @@ for _tools, _dispatch_fn in [
 ALL_TOOLS: list[Tool] = (
     DATA_TOOLS + ANALYSE_TOOLS + VALIDATE_TOOLS + NISTA_TOOLS
     + ASSURE_TOOLS + BRM_TOOLS + PORTFOLIO_TOOLS + EV_TOOLS + SYNTHESIS_TOOLS
-    + RISK_TOOLS + CHANGE_TOOLS + RESOURCE_TOOLS + FINANCIAL_TOOLS
+    + RISK_TOOLS + CHANGE_TOOLS + RESOURCE_TOOLS + FINANCIAL_TOOLS + KNOWLEDGE_TOOLS
 )
 
 logger.info(
     "PDA Platform unified server: %d tools from %d modules",
     len(ALL_TOOLS),
-    13,
+    14,
 )
 
 

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agent-task-planning"
 version = "1.0.0"
-description = "AI reliability framework with confidence extraction, outlier mining, and multi-sample consensus scoring for LLM-powered applications."
+description = "AI reliability toolkit: confidence extraction, outlier mining, and multi-sample consensus scoring for LLM-powered applications. Used by the PDA Platform MCP server."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

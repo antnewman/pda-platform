@@ -1,8 +1,8 @@
 # PDA Platform — MCP Tools Reference
 
-**Version:** 1.0 | **Total tools:** 58 | **Modules:** 6
+**Version:** 2.0 | **Total tools:** 99 | **Modules:** 14
 
-This reference documents all 58 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
+This reference documents all 99 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
 
 ---
 
@@ -16,6 +16,14 @@ This reference documents all 58 MCP tools available in the PDA Platform, coverin
 - [pm-nista — GMPP Reporting and NISTA API Integration](#pm-nista--gmpp-reporting-and-nista-api-integration)
 - [pm-assure — Assurance Lifecycle](#pm-assure--assurance-lifecycle)
 - [pm-brm — Benefits Realisation Management](#pm-brm--benefits-realisation-management)
+- [pm-portfolio — Portfolio Intelligence](#pm-portfolio--portfolio-intelligence)
+- [pm-ev — Earned Value Analysis](#pm-ev--earned-value-analysis)
+- [pm-synthesis — AI Health Summaries](#pm-synthesis--ai-health-summaries)
+- [pm-risk — Risk Register and Intelligence](#pm-risk--risk-register-and-intelligence)
+- [pm-change — Change Control](#pm-change--change-control)
+- [pm-resource — Resource Capacity Planning](#pm-resource--resource-capacity-planning)
+- [pm-financial — Financial Management](#pm-financial--financial-management)
+- [pm-knowledge — IPA Knowledge Base](#pm-knowledge--ipa-knowledge-base)
 
 ---
 
@@ -48,12 +56,21 @@ Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) c
 
 | Module | Tools | Purpose |
 |--------|-------|---------|
-| [pm-data](#pm-data--project-data-loading-and-querying) | 6 | Load project files, query tasks, dependencies, and critical path |
-| [pm-analyse](#pm-analyse--ai-powered-analysis) | 6 | AI-powered risk identification, forecasting, health assessment |
-| [pm-validate](#pm-validate--validation) | 4 | Structural, semantic, NISTA, and custom validation |
-| [pm-nista](#pm-nista--gmpp-reporting-and-nista-api-integration) | 5 | GMPP quarterly reporting and NISTA API submission |
-| [pm-assure](#pm-assure--assurance-lifecycle) | 27 | Full assurance lifecycle covering P1–P14 |
-| [pm-brm](#pm-brm--benefits-realisation-management) | 10 | Benefits Realisation Management aligned to IPA/Green Book (P13) |
+| pm-data | 6 | Load project files, query tasks, dependencies, and critical path |
+| pm-analyse | 6 | AI-powered risk identification, forecasting, health assessment |
+| pm-validate | 4 | Structural, semantic, NISTA, and custom validation |
+| pm-nista | 5 | GMPP quarterly reporting and NISTA API submission |
+| pm-assure | 27 | Full assurance lifecycle covering P1–P14 |
+| pm-brm | 10 | Benefits Realisation Management aligned to IPA/Green Book (P13) |
+| pm-portfolio | 5 | Cross-project portfolio aggregation and health rollup |
+| pm-ev | 2 | Earned Value metrics (SPI/CPI/EAC/TCPI) and HTML dashboard |
+| pm-synthesis | 2 | AI-generated executive health summaries and cross-project comparison |
+| pm-risk | 9 | Risk register, heat map, mitigations, velocity tracking, stale detection |
+| pm-change | 5 | Change control log, impact analysis, change pressure analysis |
+| pm-resource | 5 | Resource loading, conflict detection, portfolio capacity planning |
+| pm-financial | 5 | Budget baseline, period actuals, EAC forecasting, spend profile |
+| pm-knowledge | 8 | IPA benchmarks, failure patterns, guidance, reference class checks |
+| **Total** | **99** | One unified endpoint |
 
 ---
 
@@ -1241,6 +1258,772 @@ Score benefits management maturity against P3M3-aligned criteria at levels 1–5
 **Returns:** Overall maturity level (1–5), per-criterion scores with evidence and gap analysis, priority improvement recommendations ranked by impact, and a maturity roadmap showing what is required to reach the next level.
 
 **Example prompt:** "Assess the benefits management maturity for project PRJ-001 and tell me what we need to do to reach P3M3 Level 3."
+
+---
+
+## pm-portfolio — Portfolio Intelligence
+
+Five tools for cross-project portfolio aggregation, health rollup, and systemic risk detection. All tools accept a `project_ids` array (list of project identifier strings) and an optional `db_path`.
+
+---
+
+### `get_portfolio_health`
+**Module:** pm-portfolio
+
+Aggregate delivery confidence across multiple projects. Returns overall portfolio DCA distribution (count and percentage at each rating), the worst-performing projects, portfolio-level trend, and a plain-English executive summary.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers to include in the portfolio. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** DCA distribution (Green/Amber-Green/Amber/Amber-Red/Red counts), ranked project list by delivery confidence, portfolio trend direction, and executive summary narrative.
+
+**Example prompt:** "Give me a portfolio health summary across projects ALPHA, BETA, and GAMMA for the investment committee."
+
+---
+
+### `get_portfolio_gate_readiness`
+**Module:** pm-portfolio
+
+Return gate readiness scores and upcoming gate dates for all projects in the portfolio. Ranks projects from most to least ready for their next gate.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Per-project gate readiness score (0.0–1.0), target gate, readiness status, blocking issues, and a ranked portfolio view.
+
+**Example prompt:** "Which of my projects are most at risk of failing their next gate review?"
+
+---
+
+### `get_portfolio_brm_overview`
+**Module:** pm-portfolio
+
+Aggregate benefits realisation status across the portfolio. Returns total approved benefits value, percentage on track/at risk/off track, and projects with the greatest benefit exposure.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Portfolio-level benefit totals, at-risk benefit value, per-project benefit confidence summary.
+
+**Example prompt:** "What is the total value of benefits at risk across the portfolio?"
+
+---
+
+### `get_portfolio_armm_summary`
+**Module:** pm-portfolio
+
+Return ARMM (Agent Readiness Maturity Model) maturity distribution across the portfolio. Identifies projects at each maturity level (0–4) and surfaces common blocking topics.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** ARMM maturity distribution, average maturity score, common blocking topics across projects.
+
+**Example prompt:** "What is the AI readiness maturity of our project portfolio?"
+
+---
+
+### `get_portfolio_assumptions_risk`
+**Module:** pm-portfolio
+
+Identify assumptions that are drifting across multiple projects simultaneously. Surfaces systemic assumption risk — shared external dependencies or common planning assumptions that, if wrong, would affect the whole portfolio.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Assumptions drifting across multiple projects, drift severity, and whether shared drift patterns indicate a systemic portfolio-level risk.
+
+**Example prompt:** "Are any assumptions drifting across multiple projects simultaneously — is there a shared dependency we're all relying on?"
+
+---
+
+## pm-ev — Earned Value Analysis
+
+Two tools for Earned Value Management analysis. EV tools require PV (Planned Value), EV (Earned Value), and AC (Actual Cost) data to be supplied or ingested from the project's financial records.
+
+---
+
+### `compute_ev_metrics`
+**Module:** pm-ev
+
+Compute the full Earned Value metric set from PV, EV, and AC inputs. Returns SPI, CPI, SV, CV, EAC, ETC, VAC, and TCPI with plain-English interpretation of each metric.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| planned_value | number | Yes | — | Budgeted cost of work scheduled (BCWS) to date. |
+| earned_value | number | Yes | — | Budgeted cost of work performed (BCWP) to date. |
+| actual_cost | number | Yes | — | Actual cost of work performed (ACWP) to date. |
+| budget_at_completion | number | Yes | — | Total approved project budget (BAC). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** SPI, CPI, SV (Schedule Variance), CV (Cost Variance), EAC (Estimate at Completion), ETC (Estimate to Complete), VAC (Variance at Completion), TCPI (To-Complete Performance Index), with interpretation flags (e.g. `cpi_alert: true` when CPI < 0.9).
+
+**Example prompt:** "Compute Earned Value metrics for Project Alpha: PV=£2.4m, EV=£2.1m, AC=£2.6m, BAC=£8m."
+
+---
+
+### `generate_ev_dashboard`
+**Module:** pm-ev
+
+Generate a self-contained HTML Earned Value dashboard with S-curves (planned vs actual vs earned value over time), key metric cards, and trend indicators. Suitable for inclusion in board packs or reporting portals.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| output_path | string | No | — | File path to write the HTML file. If omitted, returns HTML as a string. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Self-contained HTML string or file path confirmation. The dashboard includes S-curves, SPI/CPI gauge charts, EAC vs BAC comparison, and a TCPI indicator.
+
+**Example prompt:** "Generate an Earned Value dashboard for Project Beta and save it to `/reports/ev-dashboard.html`."
+
+---
+
+## pm-synthesis — AI Health Summaries
+
+Two tools for AI-generated executive health summaries. These tools draw on data from all other modules to produce synthesised, narrative outputs. Requires `ANTHROPIC_API_KEY` to be set.
+
+---
+
+### `summarise_project_health`
+**Module:** pm-synthesis
+
+Generate an AI executive health summary for a project, synthesising data from schedule, risk, financial, benefits, and assurance modules. Output is calibrated for a non-technical audience.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| audience | string | No | `SRO` | Target audience for tone and content calibration. One of: `SRO`, `PMO`, `BOARD`. |
+| sections | array of strings | No | all | Specific sections to include. Options: `schedule`, `cost`, `risk`, `benefits`, `assurance`, `recommendations`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Structured executive summary with overall confidence rating, section-by-section assessment, key findings, and prioritised recommended actions. Includes a data completeness indicator showing which modules had sufficient data.
+
+**Example prompt:** "Produce a board-ready health summary for Project Alpha, focusing on schedule, cost, and benefits."
+
+---
+
+### `compare_project_health`
+**Module:** pm-synthesis
+
+Compare health summaries across multiple projects and produce a ranked comparative analysis. Useful for portfolio reviews, investment committees, and assurance prioritisation.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers to compare (minimum 2, maximum 10). |
+| comparison_dimensions | array of strings | No | all | Dimensions to compare. Options: `schedule`, `cost`, `risk`, `benefits`, `assurance`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Ranked project list by overall health, dimension-by-dimension comparison table, narrative identifying which projects are leading/lagging and why, and recommendations for where to focus assurance resource.
+
+**Example prompt:** "Compare the health of projects ALPHA, BETA, and GAMMA and tell me which needs the most urgent attention."
+
+---
+
+## pm-risk — Risk Register and Intelligence
+
+Nine tools for risk management aligned to IPA/MoR taxonomy. All risk tools use the AssuranceStore SQLite database via the optional `db_path` parameter.
+
+**Risk scoring:** `risk_score = likelihood × impact`. Verbal ratings: LOW (1–6), MEDIUM (7–12), HIGH (13–19), CRITICAL (20–25).
+
+**Likelihood scale:** 1=Rare, 2=Unlikely, 3=Possible, 4=Likely, 5=Almost Certain.
+
+**Impact scale:** 1=Negligible, 2=Minor, 3=Moderate, 4=Major, 5=Catastrophic.
+
+---
+
+### `ingest_risk`
+**Module:** pm-risk
+
+Register a new risk in the project risk register. Computes `risk_score` automatically from likelihood × impact.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| title | string | Yes | — | Concise risk title. |
+| description | string | No | — | Narrative explaining the risk, its cause, and potential consequences. |
+| category | string | No | `DELIVERY` | IPA-aligned category. One of: `DELIVERY`, `FINANCIAL`, `STRATEGIC`, `LEGAL`, `REPUTATIONAL`, `TECHNICAL`, `RESOURCE`. |
+| likelihood | integer | No | `3` | Likelihood score 1–5. |
+| impact | integer | No | `3` | Impact score 1–5. |
+| owner | string | No | — | Risk owner name or role. |
+| target_date | string | No | — | Target date for mitigation. Format: `YYYY-MM-DD`. |
+| proximity | string | No | — | How close the risk is to materialising. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Risk ID, computed risk_score, verbal rating, and confirmation.
+
+**Example prompt:** "Log a new TECHNICAL risk for Project Alpha: our key integration supplier has indicated they may not be able to resource the contract. Likelihood 4, Impact 4."
+
+---
+
+### `update_risk_status`
+**Module:** pm-risk
+
+Update the status of an existing risk (OPEN → MITIGATED → CLOSED) and optionally update its likelihood, impact, or notes.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| risk_id | string | Yes | — | Risk identifier returned by `ingest_risk`. |
+| status | string | Yes | — | New status. One of: `OPEN`, `MITIGATED`, `CLOSED`, `ACCEPTED`. |
+| notes | string | No | — | Notes on the status change. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Updated risk record.
+
+**Example prompt:** "Mark risk RSK-042 as MITIGATED — the supplier has confirmed resourcing."
+
+---
+
+### `get_risk_register`
+**Module:** pm-risk
+
+Retrieve the full risk register for a project with optional filters by status, category, and minimum score.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| status_filter | string | No | `OPEN` | Filter by status. One of: `OPEN`, `MITIGATED`, `CLOSED`, `ACCEPTED`, `ALL`. |
+| category_filter | string | No | — | Filter by category (e.g. `FINANCIAL`). |
+| min_score | integer | No | — | Return only risks with risk_score ≥ this value. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Sorted risk list (highest score first) with full risk details, summary statistics, and count by category.
+
+**Example prompt:** "Show me all open HIGH and CRITICAL risks for Project Beta."
+
+---
+
+### `get_risk_heat_map`
+**Module:** pm-risk
+
+Generate a 5×5 probability-impact heat map for a project's open risks. Groups risks by likelihood/impact cell.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** 5×5 heat map grid with risk counts per cell, risk distribution summary, and risks in the CRITICAL zone (top-right quadrant).
+
+**Example prompt:** "Show me the risk heat map for Project Alpha — I need to present it to the project board."
+
+---
+
+### `ingest_mitigation`
+**Module:** pm-risk
+
+Log a mitigation action for an existing risk. Tracks planned, in-progress, and completed mitigations separately from the risk itself.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| risk_id | string | Yes | — | Risk identifier. |
+| project_id | string | Yes | — | Project identifier. |
+| action | string | Yes | — | Description of the mitigation action. |
+| owner | string | No | — | Person or role responsible for this mitigation. |
+| target_date | string | No | — | Target completion date. Format: `YYYY-MM-DD`. |
+| status | string | No | `PLANNED` | Mitigation status. One of: `PLANNED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`. |
+| residual_likelihood | integer | No | — | Expected likelihood after mitigation (1–5). |
+| residual_impact | integer | No | — | Expected impact after mitigation (1–5). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Mitigation ID, residual risk score (if residuals supplied), confirmation.
+
+**Example prompt:** "Log a mitigation for risk RSK-042: engage a backup supplier by 30 June. Owner: Commercial Manager."
+
+---
+
+### `get_mitigation_progress`
+**Module:** pm-risk
+
+Return all mitigation actions for a project, grouped by risk, with progress tracking and overdue flagging.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Per-risk mitigation summary (count, completion rate, overdue actions), portfolio totals, and a list of all overdue mitigations requiring attention.
+
+**Example prompt:** "Which risk mitigations are overdue on Project Beta?"
+
+---
+
+### `get_portfolio_risks`
+**Module:** pm-risk
+
+Aggregate risks across multiple projects to identify shared risk themes, systemic exposures, and cross-project risk concentration.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers. |
+| min_score | integer | No | `6` | Minimum risk_score to include. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Aggregated risk count by category and score band, projects with highest risk concentration, risks appearing as HIGH/CRITICAL across multiple projects (systemic risk indicators).
+
+**Example prompt:** "Which risk categories appear most frequently across the portfolio? Are there systemic risks we should be managing centrally?"
+
+---
+
+### `get_risk_velocity`
+**Module:** pm-risk
+
+Analyse how individual risk scores are changing over successive review cycles. Returns risks categorised as accelerating (score increasing), decelerating (score decreasing), stable, or with insufficient history.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| min_history_entries | integer | No | `2` | Minimum history entries required to compute velocity. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Risks grouped by velocity (accelerating/decelerating/stable/insufficient-data), with current score, score at first entry, total delta, and recent delta. Accelerating risks sorted by current score (worst first).
+
+**Example prompt:** "Which risks on Project Alpha are accelerating? I want to know which ones are getting worse before the score formally changes."
+
+---
+
+### `detect_stale_risks`
+**Module:** pm-risk
+
+Identify compliance-not-management patterns in the risk register. Returns a stale register score (0–100) and categorised lists of risks that have not been updated recently, risks whose scores have not changed across multiple cycles, and high-scoring risks with no active mitigation.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| stale_days | integer | No | `28` | Days without update before a risk is considered stale. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Stale register score (0=fully active, 100=completely stale), counts by staleness type, categorised risk lists, plain-English interpretation, and recommended actions.
+
+**Example prompt:** "Is our risk register being actively managed or just maintained for compliance? Give me a stale register assessment."
+
+---
+
+## pm-change — Change Control
+
+Five tools for structured change control, impact analysis, and change pressure detection. All tools use the AssuranceStore via optional `db_path`.
+
+---
+
+### `log_change_request`
+**Module:** pm-change
+
+Log a new change request with type classification, impact assessment, and governance routing.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| title | string | Yes | — | Concise change request title. |
+| description | string | No | — | Detailed description of the proposed change. |
+| change_type | string | Yes | — | Change category. One of: `SCOPE`, `COST`, `SCHEDULE`, `RISK`, `GOVERNANCE`. |
+| cost_impact | number | No | — | Estimated cost impact in project currency (positive = cost increase). |
+| schedule_impact_days | integer | No | — | Estimated schedule impact in calendar days (positive = delay). |
+| requestor | string | No | — | Person or team requesting the change. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Change request ID, status (PENDING), and confirmation.
+
+**Example prompt:** "Log a SCOPE change request for Project Beta: adding user authentication module. Estimated cost impact £85,000, schedule impact 3 weeks."
+
+---
+
+### `update_change_status`
+**Module:** pm-change
+
+Move a change request through the governance lifecycle: PENDING → APPROVED or REJECTED → IMPLEMENTED or WITHDRAWN.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| change_id | string | Yes | — | Change request identifier. |
+| status | string | Yes | — | New status. One of: `PENDING`, `APPROVED`, `REJECTED`, `IMPLEMENTED`, `WITHDRAWN`. |
+| decision_rationale | string | No | — | Rationale for the approval or rejection decision. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Updated change request record with status history.
+
+**Example prompt:** "Mark change request CHG-017 as APPROVED. Rationale: user authentication is in scope per the original business case requirements."
+
+---
+
+### `get_change_log`
+**Module:** pm-change
+
+Retrieve the full change log for a project with optional filters by status and change type.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| status_filter | string | No | `ALL` | Filter by status. One of: `PENDING`, `APPROVED`, `REJECTED`, `IMPLEMENTED`, `WITHDRAWN`, `ALL`. |
+| change_type_filter | string | No | — | Filter by change type (e.g. `SCOPE`). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Change log entries sorted by date, with summary statistics (count by status, total cost and schedule impact of approved changes).
+
+**Example prompt:** "Show me all approved changes to Project Alpha and their total impact on cost and schedule."
+
+---
+
+### `get_change_impact_summary`
+**Module:** pm-change
+
+Aggregate the total cost and schedule impact of all approved and implemented changes since baseline. Useful for explaining variance between the approved baseline and current position.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Total approved cost impact (£), total approved schedule impact (days), count of changes by type, and a breakdown showing how much of the current cost/schedule variance is attributable to approved changes vs unexplained variance.
+
+**Example prompt:** "How much of Project Beta's £1.2m cost overrun is attributable to approved change requests?"
+
+---
+
+### `analyse_change_pressure`
+**Module:** pm-change
+
+Detect scope instability by analysing the volume, rate, and pattern of change requests. High change pressure is a leading indicator of requirements instability and delivery risk.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| window_days | integer | No | `90` | Analysis window in days. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Change request rate (per month), dominant change types, trend (increasing/stable/decreasing), a change pressure score (LOW/MEDIUM/HIGH/CRITICAL), and interpretation linking the pattern to known delivery risks.
+
+**Example prompt:** "Is the volume of change requests on Project Gamma increasing? I'm worried about scope creep before Gate 3."
+
+---
+
+## pm-resource — Resource Capacity Planning
+
+Five tools for resource demand analysis, conflict detection, and portfolio-level capacity planning.
+
+---
+
+### `log_resource_plan`
+**Module:** pm-resource
+
+Record the planned resource profile for a project — roles, headcount, and monthly demand.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| resource_data | object | Yes | — | Resource plan data including roles, FTE, and time periods. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Resource plan ID and confirmation.
+
+**Example prompt:** "Log the resource plan for Project Alpha: 2 business analysts, 3 developers, 1 architect from January to June 2026."
+
+---
+
+### `analyse_resource_loading`
+**Module:** pm-resource
+
+Analyse resource utilisation across the project schedule. Returns utilisation by role, identifies over-allocated periods, and flags workstreams where resource demand exceeds available supply.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Utilisation by role and period, over-allocation flags, peak demand periods, and a resource health assessment.
+
+**Example prompt:** "Show me the resource loading for Project Beta — are there any over-allocation peaks in the next three months?"
+
+---
+
+### `detect_resource_conflicts`
+**Module:** pm-resource
+
+Identify specific instances where the same resource (person or role) is committed to multiple tasks or projects simultaneously beyond their available capacity.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** List of conflicts with resource name/role, conflicting tasks or projects, dates, and over-commitment severity. Flags conflicts on the critical path separately as highest priority.
+
+**Example prompt:** "Are there any resource conflicts on Project Alpha that could affect the critical path?"
+
+---
+
+### `get_critical_resources`
+**Module:** pm-resource
+
+Identify resources (people or roles) whose absence would critically impact delivery — single points of failure in the resource plan.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** List of critical resources with dependency score, tasks that depend on them, and recommended risk mitigations (succession planning, knowledge transfer, backup identification).
+
+**Example prompt:** "Who are the critical resources on Project Gamma — if any of them left tomorrow, which deliverables would be most at risk?"
+
+---
+
+### `get_portfolio_capacity`
+**Module:** pm-resource
+
+Aggregate resource demand across all projects in the portfolio and compare against declared organisational supply. Identifies months where aggregate demand exceeds capacity.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Monthly demand/supply comparison by role, over-capacity months, projects contributing most to peak demand, and portfolio capacity health rating.
+
+**Example prompt:** "Do we have enough capacity across the portfolio to support all three projects starting in Q1 2026?"
+
+---
+
+## pm-financial — Financial Management
+
+Five tools for financial baseline setting, actuals tracking, forecasting, and cost performance analysis. All tools use the AssuranceStore via optional `db_path`.
+
+---
+
+### `set_financial_baseline`
+**Module:** pm-financial
+
+Set the approved financial baseline for a project. Should be called at Gate 3 (Investment Decision) when the Full Business Case is approved.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| budget_at_completion | number | Yes | — | Total approved budget (BAC) in project currency. |
+| baseline_date | string | Yes | — | Date the baseline was approved. Format: `YYYY-MM-DD`. |
+| spend_profile | object | No | — | Optional monthly planned spend profile as `{"YYYY-MM": amount}`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Baseline ID and confirmation.
+
+**Example prompt:** "Set the financial baseline for Project Alpha at £4.2m, approved on 15 March 2025."
+
+---
+
+### `log_financial_actuals`
+**Module:** pm-financial
+
+Record actual spend for a specific reporting period.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| period | string | Yes | — | Reporting period. Format: `YYYY-MM`. |
+| actual_spend | number | Yes | — | Actual spend in this period. |
+| cumulative_spend | number | No | — | Cumulative actual spend to end of period. |
+| notes | string | No | — | Notes on spend (e.g. explanation of variance). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Actuals record ID, period-to-date variance vs planned, cumulative variance vs baseline.
+
+**Example prompt:** "Log March 2025 actuals for Project Beta: £340,000 spent this month, £980,000 cumulative."
+
+---
+
+### `get_cost_performance`
+**Module:** pm-financial
+
+Retrieve cost performance analysis comparing actuals against baseline. Returns CPI, cost variance, EAC projection, and trend assessment.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** CPI (Cost Performance Index), cost variance (£ and %), current EAC vs BAC, projected overrun/underspend, trend direction (improving/stable/deteriorating), and interpretation.
+
+**Example prompt:** "What is the cost performance position for Project Alpha? Is the current trajectory sustainable?"
+
+---
+
+### `log_cost_forecast`
+**Module:** pm-financial
+
+Record an updated Estimate at Completion (EAC) with rationale. Maintains a forecast history for trend analysis and governance transparency.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| estimate_at_completion | number | Yes | — | Updated total cost forecast (EAC). |
+| forecast_date | string | Yes | — | Date of this forecast. Format: `YYYY-MM-DD`. |
+| rationale | string | No | — | Explanation of why the EAC has changed from the previous forecast. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Forecast ID, variance from BAC, variance from previous EAC, confirmation.
+
+**Example prompt:** "Update the cost forecast for Project Gamma to £5.1m (up from £4.8m). The increase is due to the approved scope change for user authentication."
+
+---
+
+### `get_spend_profile`
+**Module:** pm-financial
+
+Return the planned versus actual spend profile over time, showing where spend is ahead of or behind the baseline plan.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite store. |
+
+**Returns:** Monthly planned vs actual spend table, cumulative S-curve data (suitable for charting), front-loaded/back-loaded assessment, and narrative on spend profile health.
+
+**Example prompt:** "Show me the spend profile for Project Beta — is it front-loaded or back-loaded compared to the approved plan?"
+
+---
+
+## pm-knowledge — IPA Knowledge Base
+
+Eight tools providing access to pre-loaded authoritative knowledge about UK government project delivery: IPA benchmark statistics, evidence-based failure patterns, guidance references, and analytical tools for reference class forecasting and pre-mortem analysis.
+
+**Data sources:** IPA Annual Reports 2019–2024, NAO reports, HM Treasury guidance, Cabinet Office Controls, Government Functional Standard GovS002.
+
+---
+
+### `list_knowledge_categories`
+**Module:** pm-knowledge
+
+List all categories of pre-loaded knowledge available in the knowledge base. Use for discovery before calling other knowledge tools.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| *(none)* | — | — | — | No parameters required. |
+
+**Returns:** Knowledge categories with descriptions, available project types, failure pattern domains, and guidance topics.
+
+**Example prompt:** "What knowledge does the platform have available about government project delivery?"
+
+---
+
+### `get_benchmark_data`
+**Module:** pm-knowledge
+
+Retrieve statistical benchmark data for a specific project type and metric, sourced from IPA Annual Reports.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_type | string | Yes | — | Project type cohort. One of: `IT_AND_DIGITAL`, `INFRASTRUCTURE`, `DEFENCE`, `HEALTH_AND_SOCIAL_CARE`, `CROSS_GOVERNMENT`. |
+| metric | string | Yes | — | Metric to retrieve. One of: `cost_overrun`, `schedule_slip`, `dca_distribution`, `common_overrun_drivers`, `optimism_bias_reference`, `all`. |
+
+**Returns:** Benchmark statistics (mean, median, P80) with source citation, sample size, and interpretation notes.
+
+**Example prompt:** "What is the typical cost overrun for UK government IT projects?"
+
+---
+
+### `get_failure_patterns`
+**Module:** pm-knowledge
+
+Retrieve evidence-based failure patterns identified by IPA and NAO research. Each pattern includes description, early warning indicators, and mitigation strategies.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| domain | string | No | `ALL` | Filter by project domain. One of: `ALL`, `IT_AND_DIGITAL`, `INFRASTRUCTURE`, `DEFENCE`, `HEALTH_AND_SOCIAL_CARE`. |
+| gate | string | No | `ANY` | Filter by gate stage relevance. One of: `GATE_0` through `GATE_5`, or `ANY`. |
+
+**Returns:** Matching failure patterns with ID, name, frequency, impact severity, description, indicators, mitigation, and IPA/NAO source reference.
+
+**Example prompt:** "What are the most common failure patterns for IT projects at Gate 3?"
+
+---
+
+### `get_ipa_guidance`
+**Module:** pm-knowledge
+
+Retrieve IPA, HM Treasury, or Cabinet Office guidance references on a specific topic with key thresholds and principles.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| topic | string | Yes | — | Guidance topic. One of: `optimism_bias`, `green_book`, `cabinet_office_controls`, `ipa_annual_report`, `gmpp_reporting`, `benefits_management`, `schedule_management`, `project_delivery_functional_standard`, `all`. |
+
+**Returns:** Guidance summary, key thresholds/principles, and source URL.
+
+**Example prompt:** "What does HM Treasury guidance say about optimism bias — what uplift should we apply to our IT cost estimate?"
+
+---
+
+### `search_knowledge_base`
+**Module:** pm-knowledge
+
+Full-text search across all knowledge: benchmark data, failure patterns, and guidance references.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| query | string | Yes | — | Search query — keyword, phrase, or question. |
+| category | string | No | `all` | Restrict to a category. One of: `benchmark_data`, `failure_patterns`, `ipa_guidance`, `all`. |
+
+**Returns:** Top 10 ranked results with category, relevance score, and preview. Use when unsure which specific tool to call.
+
+**Example prompt:** "Find everything in the knowledge base about supplier risk and lock-in."
+
+---
+
+### `run_reference_class_check`
+**Module:** pm-knowledge
+
+Compare a submitted cost or schedule estimate against the IPA benchmark distribution for comparable completed projects. Returns the approximate percentile, an optimism bias risk flag if below P50, and a recommended P80 provision.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_type | string | Yes | — | Project type cohort for benchmark selection. One of: `IT_AND_DIGITAL`, `INFRASTRUCTURE`, `DEFENCE`, `HEALTH_AND_SOCIAL_CARE`, `CROSS_GOVERNMENT`. |
+| estimate_type | string | Yes | — | What is being estimated. One of: `cost_overrun` (as % above baseline), `schedule_slip` (as months). |
+| submitted_value | number | Yes | — | The estimate to check. For `cost_overrun`: percentage (e.g. `10` = 10% overrun expected). For `schedule_slip`: months. |
+
+**Returns:** Approximate percentile, optimism bias flag, benchmark distribution (median/P80/mean), recommended minimum and P80 provision, and plain-English interpretation.
+
+**Example prompt:** "Our project team estimates a 5% cost contingency is sufficient for this IT programme. Is that realistic compared to similar government projects?"
+
+---
+
+### `get_benchmark_percentile`
+**Module:** pm-knowledge
+
+Position any metric value within the IPA benchmark distribution for comparable projects. Transforms an abstract number into a context-rich, percentile-ranked interpretation.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_type | string | Yes | — | Project type cohort. One of: `IT_AND_DIGITAL`, `INFRASTRUCTURE`, `DEFENCE`, `HEALTH_AND_SOCIAL_CARE`, `CROSS_GOVERNMENT`. |
+| metric | string | Yes | — | Metric to benchmark. One of: `cost_overrun`, `schedule_slip`, `dca_green_rate`. |
+| value | number | Yes | — | The value to position in the distribution. |
+
+**Returns:** Distribution position description, benchmark statistics, and plain-English interpretation.
+
+**Example prompt:** "Our IT project has a 15% cost overrun so far. Is that above or below average for projects of this type?"
+
+---
+
+### `generate_premortem_questions`
+**Module:** pm-knowledge
+
+Generate structured pre-mortem challenge questions for an IPA gate review. Questions are drawn from a library keyed to gate stage and known cognitive failure modes (optimism bias, groupthink, escalation of commitment, bad news suppression).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| gate | string | Yes | — | IPA gate being reviewed. One of: `GATE_0`, `GATE_1`, `GATE_2`, `GATE_3`, `GATE_4`, `GATE_5`, `ANY`. |
+| risk_flags | array of strings | No | `[]` | Risk flags for targeted questions. One or more of: `optimism_bias`, `benefits_unowned`, `schedule_no_float`, `supplier_dependency`, `stale_risks`, `sro_capacity`. |
+| max_questions | integer | No | `8` | Maximum questions to return. |
+
+**Returns:** Structured question set with source (gate-specific or universal), target area, and failure mode each question addresses. Includes usage guidance for gate review facilitation.
+
+**Example prompt:** "Generate pre-mortem questions for our Gate 3 review. Flag questions about optimism bias and supplier dependency — both are relevant for this project."
 
 ---
 

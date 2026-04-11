@@ -1,14 +1,14 @@
 # Claude Code Instructions — PDA Platform
 
 ## Project Overview
-The PDA Platform is a Python monorepo providing AI-powered project delivery assurance for UK government. It exposes 89 MCP tools across 13 modules via a unified server, deployable locally or via Render.
+The PDA Platform is a Python monorepo providing AI-powered project delivery assurance for UK government. It exposes 99 MCP tools across 14 modules via a unified server, deployable locally or via Render.
 
 ## Repo Structure
 ```
 packages/
   pda-platform/          Meta-package (pip install pda-platform)
   pm-data-tools/         Core library: parsers, validators, AssuranceStore (SQLite)
-  pm-mcp-servers/        13 MCP modules, 89 tools
+  pm-mcp-servers/        14 MCP modules, 99 tools
   agent-task-planning/   AI reliability: confidence extraction, outlier mining
 docs/                    Practitioner guides and technical references
 .github/workflows/       publish.yml — PyPI publish on version tag
@@ -66,7 +66,7 @@ Use semantic versioning:
 
 ## MCP Tool Count — Keep in Sync
 
-The tool count (currently **89**) appears in multiple places. When adding new tools, update ALL of these:
+The tool count (currently **99**) appears in multiple places. When adding new tools, update ALL of these:
 
 | File | What to update |
 |---|---|
@@ -76,10 +76,13 @@ The tool count (currently **89**) appears in multiple places. When adding new to
 | `docs/architecture-overview.md` | Module table |
 | `docs/connection-guide.md` | Tool count references |
 | `docs/getting-started.md` | Tool count references |
-| `packages/pm-mcp-servers/README.md` | Tool count |
+| `packages/pm-mcp-servers/README.md` | Module table, total tool count |
+| `packages/pda-platform/README.md` | Module table, total tool count |
+| `packages/pda-platform/pyproject.toml` | `description` field tool count |
+| `packages/pm-mcp-servers/pyproject.toml` | `description` field tool count and module count |
 | `docs/hackathon/CHALLENGE.md` | Numbers section |
 | `docs/hackathon/QUICKSTART.md` | What's Available section |
-| `packages/pda-platform/README.md` | Module table |
+| `server.json` | `description` field (root level) |
 | `CLAUDE.md` (this file) | Package versions table, MCP tool count |
 
 ## Store Schema — Keep in Sync
@@ -88,6 +91,62 @@ When adding a new module that needs persistence:
 1. Add `CREATE TABLE IF NOT EXISTS` blocks to `_init_db()` in `packages/pm-data-tools/src/pm_data_tools/db/store.py`
 2. Add store methods in the same file (upsert/get pattern)
 3. Do this BEFORE launching agents to build the MCP module — agents depend on the store methods existing
+
+## Documentation Requirements — Mandatory for Every Feature
+
+Every new module, tool, or significant capability **must** be accompanied by documentation before it is considered complete. This is non-negotiable.
+
+### For every new MCP module, write:
+
+| Document | Location | What it covers |
+|---|---|---|
+| For-practitioners guide | `docs/<module-name>-for-practitioners.md` | What the module does, when to use each tool, worked examples with realistic inputs/outputs, common workflows, limitations |
+| Section in MCP tools reference | `docs/mcp-tools-reference.md` | Parameter-level reference for each tool — all inputs, outputs, enums, defaults |
+| Model card (AI-powered modules only) | `docs/model-cards/<module-name>.md` | Model behaviour, limitations, confidence calibration, failure modes |
+
+### For every new tool added to an existing module:
+
+1. Add a parameter-level entry to `docs/mcp-tools-reference.md`
+2. Add an example to the relevant for-practitioners guide
+3. If the tool changes what a persona can do, update the relevant persona guide in `docs/guides/`
+
+### Persona-based user guides — keep current
+
+Four guides live in `docs/guides/`. Update them whenever a new module or tool is relevant to that persona's work:
+
+| Guide | Persona | Focus |
+|---|---|---|
+| `docs/guides/sro-guide.md` | Senior Responsible Owner | Delivery confidence, benefits, escalation, board-ready outputs |
+| `docs/guides/pm-guide.md` | Project Manager | Schedule, cost, risk, resources, operational actions |
+| `docs/guides/assurance-reviewer-guide.md` | Independent Assurance Reviewer | Gate reviews, IPA methodology, challenge, DCA ratings |
+| `docs/guides/portfolio-manager-guide.md` | Portfolio Manager | Cross-project analysis, systemic risk, coherence, intervention |
+
+Each guide must include:
+- What tools are most relevant to this persona
+- At least 3 worked examples (realistic conversation + tool call sequence + output interpretation)
+- How to combine role system prompts with research prompts
+
+### Documentation debt tracking
+
+Current documentation status (update this when docs are written):
+
+| Module | For-practitioners guide | MCP reference | Model card | Persona guide coverage |
+|---|---|---|---|---|
+| pm-data | ✅ | ✅ v2.0 | n/a | ✅ |
+| pm-analyse | ✅ | ✅ v2.0 | ✅ | ✅ |
+| pm-validate | ✅ | ✅ v2.0 | n/a | partial |
+| pm-nista | ❌ needed | ✅ v2.0 | n/a | partial |
+| pm-assure | ✅ | ✅ v2.0 | ✅ | ✅ |
+| pm-brm | ✅ | ✅ v2.0 | ⚠️ needed | ✅ |
+| pm-gate-readiness | ✅ | ✅ v2.0 | ⚠️ needed | ✅ |
+| pm-portfolio | ✅ | ✅ v2.0 | n/a | ✅ |
+| pm-ev | ✅ | ✅ v2.0 | ✅ | partial |
+| pm-synthesis | ✅ | ✅ v2.0 | ✅ | partial |
+| pm-risk | ✅ | ✅ v2.0 | n/a | ✅ |
+| pm-change | ✅ | ✅ v2.0 | n/a | partial |
+| pm-resource | ✅ | ✅ v2.0 | n/a | partial |
+| pm-financial | ✅ | ✅ v2.0 | n/a | ✅ |
+| pm-knowledge | ✅ | ✅ v2.0 | n/a | ✅ |
 
 ## Adding a New MCP Module
 
@@ -99,8 +158,10 @@ Standard pattern (see `pm_brm` as the reference implementation):
 5. Wire into `pda_platform/server.py` — import, add to dispatch loop and `ALL_TOOLS`
 6. Update `test_pda_platform.py` — new registry test, tool presence test, updated counts
 7. Run `python -m pytest packages/pm-mcp-servers/tests/` — must pass
-8. Update all tool count references (see table above)
-9. Bump package versions
+8. Update all tool count references (see table above) — this includes `packages/pda-platform/README.md`, `packages/pm-mcp-servers/README.md`, both `pyproject.toml` description fields, and `server.json`
+9. **Write for-practitioners guide, MCP reference section, and model card (if AI-powered)** — see Documentation Requirements above
+10. **Update relevant persona guides with worked examples** — see Documentation Requirements above
+11. Bump package versions
 
 ## Deployment
 - **Render:** `main` branch auto-deploys via `render.yaml`. The build installs from source (not PyPI).

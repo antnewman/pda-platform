@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "pm-data-tools"
 version = "1.0.0"
-description = "Universal parser, validator, and assurance store for UK government project management data. Supports NISTA, GMPP, MSPDI, Primavera P6, Jira, and more."
+description = "Parser, validator, and SQLite assurance store for UK government project data. Supports NISTA, GMPP, MSPDI, Primavera P6, and Jira. Backbone of the PDA Platform MCP server."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pm-mcp-servers"
 version = "1.0.0"
-description = "89 MCP tools for AI-powered UK government project delivery assurance. Connects Claude and other AI assistants to schedule data, risk registers, financial tracking, gate readiness, and benefits realisation."
+description = "99 MCP tools across 14 modules for UK government IPA Gate Review assurance. Risk registers, earned value, benefits realisation, gate readiness, portfolio analysis, and IPA benchmark data."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -75,6 +75,7 @@ pm-validate-server = "pm_mcp_servers.pm_validate.server:main"
 pm-analyse-server = "pm_mcp_servers.pm_analyse.server:main"
 pm-nista-server = "pm_mcp_servers.pm_nista.server:main"
 pm-assure-server = "pm_mcp_servers.pm_assure.server:main"
+pm-knowledge-server = "pm_mcp_servers.pm_knowledge.server:main"
 pda-platform-server = "pm_mcp_servers.pda_platform.server:main"
 pda-platform-remote = "pm_mcp_servers.pda_platform.remote:main"
 

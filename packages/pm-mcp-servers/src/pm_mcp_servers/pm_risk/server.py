@@ -12,6 +12,10 @@ Phase 2 tools:
 
 Phase 3 tools:
   7. get_portfolio_risks      — Cross-project HIGH/CRITICAL risk summary
+
+Phase 4 tools:
+  8. get_risk_velocity        — Analyse how individual risk scores are changing over successive review cycles
+  9. detect_stale_risks       — Identify risks showing compliance-not-management patterns
 """
 
 from __future__ import annotations
@@ -359,6 +363,69 @@ RISK_TOOLS: list[Tool] = [
                 },
             },
             "required": ["project_ids"],
+        },
+    ),
+    # ------------------------------------------------------------------
+    # Phase 4: Velocity and staleness analysis
+    # ------------------------------------------------------------------
+    Tool(
+        name="get_risk_velocity",
+        description=(
+            "Analyse how individual risk scores are changing over successive review cycles for a project. "
+            "Returns risks with accelerating exposure (likelihood or impact increasing across reviews), "
+            "decelerating exposure (scores improving), and stable risks. "
+            "A risk whose likelihood has increased across three consecutive reviews is more urgent than "
+            "one with a higher static score. Use to prioritise which risks require immediate intervention "
+            "vs. which are being successfully managed."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "min_history_entries": {
+                    "type": "integer",
+                    "description": "Minimum number of history entries required to compute velocity (default 2).",
+                    "default": 2,
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Optional path to the SQLite store.",
+                },
+            },
+            "required": ["project_id"],
+        },
+    ),
+    Tool(
+        name="detect_stale_risks",
+        description=(
+            "Identify risks on the project register that show signs of compliance-not-management: "
+            "risks that have not been updated recently, risks whose scores have not changed across "
+            "multiple review cycles, and risks with no active mitigation. "
+            "A risk register that appears maintained but is actually static is a governance red flag — "
+            "it suggests risks are being reviewed for process compliance rather than actively managed. "
+            "Returns a stale register score (0-100) and a categorised list of stale risks."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "stale_days": {
+                    "type": "integer",
+                    "description": "Number of days without update before a risk is considered stale (default 28).",
+                    "default": 28,
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Optional path to the SQLite store.",
+                },
+            },
+            "required": ["project_id"],
         },
     ),
 ]
@@ -784,6 +851,192 @@ async def _get_mitigation_progress(arguments: dict[str, Any]) -> list[TextConten
         }
 
         return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+
+
+async def _get_risk_velocity(arguments: dict[str, Any]) -> list[TextContent]:
+    """Analyse how risk scores are changing over successive review cycles."""
+    try:
+        store = _get_store(arguments)
+        project_id = arguments["project_id"]
+        min_entries = arguments.get("min_history_entries", 2)
+
+        risks = store.get_risks(project_id=project_id)
+
+        accelerating = []
+        decelerating = []
+        stable = []
+        insufficient_data = []
+
+        for risk in risks:
+            history = store.get_risk_score_history(risk["id"])
+
+            if len(history) < min_entries:
+                insufficient_data.append({
+                    "risk_id": risk["id"],
+                    "title": risk["title"],
+                    "current_score": risk["risk_score"],
+                    "history_entries": len(history),
+                })
+                continue
+
+            scores = [h["risk_score"] for h in history]
+            score_delta = scores[-1] - scores[0]
+            recent_delta = scores[-1] - scores[-2] if len(scores) >= 2 else 0
+
+            if len(scores) >= 3:
+                recent_trend = scores[-1] - scores[-3]
+            else:
+                recent_trend = recent_delta
+
+            risk_summary = {
+                "risk_id": risk["id"],
+                "title": risk["title"],
+                "category": risk["category"],
+                "current_score": risk["risk_score"],
+                "current_likelihood": risk["likelihood"],
+                "current_impact": risk["impact"],
+                "score_at_first_entry": scores[0],
+                "total_delta": score_delta,
+                "recent_delta": recent_delta,
+                "history_entries": len(history),
+                "velocity": "accelerating" if recent_trend > 0 else ("decelerating" if recent_trend < 0 else "stable"),
+            }
+
+            if recent_trend > 0:
+                accelerating.append(risk_summary)
+            elif recent_trend < 0:
+                decelerating.append(risk_summary)
+            else:
+                stable.append(risk_summary)
+
+        accelerating.sort(key=lambda x: x["current_score"], reverse=True)
+
+        result = {
+            "project_id": project_id,
+            "summary": {
+                "total_risks": len(risks),
+                "accelerating": len(accelerating),
+                "decelerating": len(decelerating),
+                "stable": len(stable),
+                "insufficient_data": len(insufficient_data),
+            },
+            "accelerating_risks": accelerating,
+            "decelerating_risks": decelerating,
+            "stable_risks": stable,
+            "insufficient_history": insufficient_data,
+            "interpretation": (
+                f"{len(accelerating)} risk(s) are accelerating (exposure increasing). "
+                f"{len(decelerating)} are decelerating (being managed down). "
+                f"{len(stable)} are stable. "
+                + (f"{len(insufficient_data)} have insufficient history to assess velocity — "
+                   f"consider whether these risks have genuinely not changed or have simply not been reviewed."
+                   if insufficient_data else "")
+            ),
+        }
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+
+
+async def _detect_stale_risks(arguments: dict[str, Any]) -> list[TextContent]:
+    """Identify risks showing compliance-not-management patterns."""
+    try:
+        from datetime import timedelta
+        store = _get_store(arguments)
+        project_id = arguments["project_id"]
+        stale_days = arguments.get("stale_days", 28)
+
+        risks = store.get_risks(project_id=project_id)
+
+        stale_threshold = datetime.utcnow() - timedelta(days=stale_days)
+
+        not_updated = []
+        score_unchanged = []
+        no_mitigation = []
+
+        for risk in risks:
+            if risk["status"] != "OPEN":
+                continue
+
+            try:
+                updated = datetime.fromisoformat(str(risk["updated_at"]).replace("Z", ""))
+                if updated < stale_threshold:
+                    days_since_update = (datetime.utcnow() - updated).days
+                    not_updated.append({
+                        "risk_id": risk["id"],
+                        "title": risk["title"],
+                        "risk_score": risk["risk_score"],
+                        "days_since_update": days_since_update,
+                        "updated_at": risk["updated_at"],
+                    })
+            except (ValueError, AttributeError):
+                pass
+
+            history = store.get_risk_score_history(risk["id"])
+            if len(history) >= 3:
+                scores = [h["risk_score"] for h in history]
+                if len(set(scores)) == 1:
+                    score_unchanged.append({
+                        "risk_id": risk["id"],
+                        "title": risk["title"],
+                        "risk_score": risk["risk_score"],
+                        "history_entries": len(history),
+                        "score_across_all_entries": scores[0],
+                    })
+
+            mitigations = store.get_mitigations(risk["id"])
+            active_mitigations = [m for m in mitigations if m["status"] not in ("COMPLETED", "CANCELLED")]
+            if not active_mitigations and (risk["risk_score"] or 0) >= 6:
+                no_mitigation.append({
+                    "risk_id": risk["id"],
+                    "title": risk["title"],
+                    "risk_score": risk["risk_score"],
+                    "category": risk["category"],
+                })
+
+        open_risks = [r for r in risks if r.get("status") == "OPEN"]
+        total_open = len(open_risks)
+        if total_open == 0:
+            stale_score = 0
+            stale_interpretation = "No open risks on the register."
+        else:
+            stale_factors = len(set([r["risk_id"] for r in not_updated] +
+                                     [r["risk_id"] for r in score_unchanged]))
+            stale_score = min(100, int(100 * stale_factors / total_open))
+            if stale_score == 0:
+                stale_interpretation = "The risk register appears actively maintained."
+            elif stale_score < 30:
+                stale_interpretation = "Most risks are being actively managed. A small number require attention."
+            elif stale_score < 60:
+                stale_interpretation = "A significant proportion of risks show staleness indicators. The register may be maintained for compliance rather than active management."
+            else:
+                stale_interpretation = "The risk register is largely stale. This is a governance red flag — risks are not being actively managed."
+
+        result = {
+            "project_id": project_id,
+            "stale_register_score": stale_score,
+            "stale_days_threshold": stale_days,
+            "summary": {
+                "total_open_risks": total_open,
+                "not_updated_in_threshold": len(not_updated),
+                "score_unchanged_across_history": len(score_unchanged),
+                "high_scoring_with_no_active_mitigation": len(no_mitigation),
+            },
+            "not_recently_updated": not_updated,
+            "score_unchanged": score_unchanged,
+            "no_active_mitigation": no_mitigation,
+            "interpretation": stale_interpretation,
+            "recommended_actions": [
+                f"Review the {len(not_updated)} risk(s) not updated in the last {stale_days} days with their owners.",
+                f"Challenge the {len(score_unchanged)} risk(s) with unchanged scores — have circumstances genuinely not changed?",
+                f"Assign active mitigations to the {len(no_mitigation)} high-scoring open risk(s) with no current mitigation.",
+            ] if total_open > 0 else [],
+        }
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
     except Exception as exc:
         return [TextContent(type="text", text=f"Error: {exc}")]
