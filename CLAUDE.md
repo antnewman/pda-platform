@@ -149,6 +149,9 @@ Current documentation status (update this when docs are written):
 | pm-resource | ✅ | ✅ v2.0 | n/a | partial |
 | pm-financial | ✅ | ✅ v2.0 | n/a | ✅ |
 | pm-knowledge | ✅ | ✅ v2.0 | n/a | ✅ |
+| pm-simulation | n/a | ✅ v2.1 | n/a | partial |
+| pm-lessons | ✅ | ✅ v2.1 | ✅ | partial |
+| pm-reporting | ✅ | ✅ v2.1 | n/a | partial |
 
 ## Adding a New MCP Module
 
