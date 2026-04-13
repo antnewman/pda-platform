@@ -1,0 +1,42 @@
+# PDA Platform
+
+> The Model Context Protocol platform purpose-built for UK government IPA Gate Review assurance. 116 tools across 17 modules. Connect Claude or any MCP-compatible AI in under 60 seconds.
+
+## What it is
+
+PDA Platform is a semantic layer for project delivery data. It ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through 116 structured MCP tools that AI can reason about directly.
+
+The platform is aligned to UK government delivery standards: IPA Gate Reviews (Gates 0-5), HM Treasury Green Book, GMPP reporting, and Cabinet Office project controls.
+
+**Live endpoint:** https://pda-platform-i33p.onrender.com/sse
+
+**Install:** pip install pda-platform
+
+## Documentation
+
+- [Full LLM reference](llms-full.txt) — complete tool listing, IPA methodology, role prompts, and workflows
+- [README](README.md) — overview, connection guide, feature summary
+- [MCP Tools Reference](docs/mcp-tools-reference.md) — parameter-level tool documentation
+- [IPA Gate Review Methodology](docs/prompts/ipa-gate-review-methodology.md) — system prompt encoding the full IPA framework
+- [Role System Prompts](docs/prompts/role-system-prompts.md) — SRO, PM, Assurance Reviewer, Portfolio Manager
+- [Research Prompts](docs/prompts/research-prompts.md) — structured analytical workflows
+
+## The 17 modules at a glance
+
+- **pm-data** (6) — load and query project files from 8 PM data formats
+- **pm-analyse** (7) — AI risk analysis, schedule forecasting, narrative divergence detection
+- **pm-validate** (4) — structural, semantic, and NISTA compliance validation
+- **pm-nista** (5) — GMPP quarterly reporting and NISTA integration
+- **pm-assure** (28) — full assurance lifecycle: artefact currency, gate readiness, ARMM, red flag scanning
+- **pm-brm** (12) — benefits realisation management, outturn forecasting, trajectory tracking
+- **pm-portfolio** (5) — cross-project health rollup, systemic risk detection
+- **pm-ev** (2) — Earned Value metrics (SPI/CPI/EAC/TCPI)
+- **pm-synthesis** (2) — AI executive health summaries and cross-project comparison
+- **pm-risk** (9) — risk register, heat map, velocity tracking, stale register detection
+- **pm-change** (5) — change control log, impact analysis, change pressure analysis
+- **pm-resource** (5) — resource loading, conflict detection, capacity planning
+- **pm-financial** (5) — budget baseline, actuals, EAC forecasting, spend profile
+- **pm-knowledge** (8) — IPA benchmarks, failure patterns, reference class checks, pre-mortem questions
+- **pm-simulation** (2) — Monte Carlo schedule simulation, P50/P80/P90 delivery dates
+- **pm-lessons** (5) — AI lessons extraction from gate reviews/PIRs, systemic pattern analysis
+- **pm-reporting** (6) — gate review summaries, SRO dashboards, board exception reports, PIR templates

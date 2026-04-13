@@ -1,0 +1,962 @@
+# PDA Platform — Complete Reference for Language Models
+
+Version: 1.2.0 | Tools: 116 | Modules: 17 | Updated: 2026-04-11
+
+This file is the single authoritative reference for language models using or reasoning about the PDA Platform. It contains the complete tool catalogue, the IPA Gate Review methodology, role system prompts, and analytical workflows. No other file is needed to understand what the platform does or how to use it.
+
+---
+
+## What the platform is
+
+PDA Platform is a semantic layer for UK government project delivery data. It solves a fundamental problem: project data is structurally rich but locked in incompatible formats (Primavera XER, MS Project MSPDI, Jira JSON, GMPP returns) and LLMs cannot reliably parse raw schedule files or reason about delivery risk without structured access.
+
+The platform:
+1. Ingests project data from 8 PM data formats and normalises it to a consistent delivery model
+2. Persists structured assurance, risk, benefits, financial, and simulation data in a local SQLite store
+3. Pre-loads five years of IPA Annual Report benchmark statistics for reference class comparisons
+4. Exposes 116 callable tools via the Model Context Protocol (MCP) that give AI structured, queryable access to delivery intelligence
+
+This is not a project management tool. It does not create schedules or replace Primavera. It is infrastructure for making existing project data usable by AI systems.
+
+**Domain:** UK government major project delivery — IPA Gate Reviews (Gates 0-5), HM Treasury Green Book, GMPP reporting, Cabinet Office project controls, OGC/IPA Gateway methodology.
+
+**Live endpoint:** https://pda-platform-i33p.onrender.com/sse
+**Install:** pip install pda-platform
+
+---
+
+## Who uses it and what they get
+
+| Role | Primary use |
+|------|------------|
+| Senior Responsible Owner | Board-ready health summaries, DCA ratings, benefits status, gate readiness position, board exception reports |
+| Project Manager | Schedule health, critical path, Earned Value (SPI/CPI/EAC), risk velocity, resource conflicts, change pressure |
+| Independent Assurance Reviewer | Full IPA Gate Review workflow, confidence divergence, ARMM maturity, pre-mortem questions, reference class benchmarking |
+| Portfolio Manager | Cross-project health rollup, aggregate DCA, systemic risk detection, portfolio coherence, intervention prioritisation |
+
+---
+
+## Start here: scan_for_red_flags
+
+Before any other analysis, call:
+
+  scan_for_red_flags(project_id="YOUR_PROJECT_ID")
+
+This single tool queries risk registers, benefits status, gate conditions, cost performance, change pressure, and resource conflicts simultaneously and returns a prioritised CRITICAL / HIGH / MEDIUM alert list with evidence trails. One call replaces six separate queries. Use it at the start of every assurance session to focus attention before running deeper analysis.
+
+---
+
+## Connecting to the platform
+
+**Remote (no installation):**
+Add to your MCP client configuration:
+  URL: https://pda-platform-i33p.onrender.com/sse
+
+**Local (Claude Desktop):**
+  pip install pda-platform
+  Add to claude_desktop_config.json:
+  {
+    "mcpServers": {
+      "pda-platform": {
+        "command": "pda-platform-server",
+        "args": []
+      }
+    }
+  }
+
+**Note:** The Render server uses a free tier and may take 30-60 seconds to wake from sleep on first connection. Send a simple query first to warm it up.
+
+---
+
+## Complete tool catalogue
+
+### pm-data — Project Data Loading and Querying (6 tools)
+
+Ingests project schedules and makes them queryable. Supports MSPDI (MS Project XML), Primavera P6 XER, Jira JSON, Monday.com, Asana, Smartsheet, GMPP, and NISTA formats.
+
+**load_project**
+Load a project file and extract its data model. Returns a project_id for use in subsequent tools.
+Required: file_path (string), format (enum: mspdi|p6_xer|jira|monday|asana|smartsheet|gmpp|nista)
+Optional: project_id (string override), db_path
+
+**query_tasks**
+Query tasks with filtering by status, owner, date range, or phase.
+Required: project_id
+Optional: status (enum: not_started|in_progress|complete|delayed), owner, start_after, start_before, phase
+
+**get_critical_path**
+Return the critical path: the sequence of tasks where any delay extends the project end date.
+Required: project_id
+Returns: ordered list of critical tasks with float, predecessors, and lag
+
+**get_dependencies**
+Return dependency relationships for a task or the full project.
+Required: project_id
+Optional: task_id (if omitted, returns all dependencies)
+
+**convert_format**
+Convert a project file from one format to another.
+Required: file_path, source_format, target_format
+
+**get_project_summary**
+Return a high-level summary: name, phase, budget, forecast, status flags, milestone dates.
+Required: project_id
+
+---
+
+### pm-analyse — AI-Powered Analysis (7 tools)
+
+Uses Claude (claude-3-5-haiku-20241022) to perform AI analysis over project data. Requires ANTHROPIC_API_KEY.
+
+**identify_risks**
+AI identification of schedule, cost, and delivery risks from project data.
+Required: project_id
+Optional: focus_area (enum: schedule|cost|resource|dependency|all)
+
+**forecast_completion**
+AI-assisted completion date forecast incorporating schedule health, risk exposure, and historical performance.
+Required: project_id
+Optional: confidence_level (enum: p50|p80|p90, default p50)
+
+**detect_outliers**
+Identify statistical outliers in task duration, cost, or resource loading.
+Required: project_id
+Optional: metric (enum: duration|cost|resource), threshold_sigma (default 2.0)
+
+**assess_health**
+Multi-signal project health assessment returning RAG rating, key signals, and recommended actions.
+Required: project_id
+
+**suggest_mitigations**
+AI-generated risk mitigation suggestions for open high-severity risks.
+Required: project_id
+Optional: risk_ids (list of specific risk IDs to target)
+
+**compare_baseline**
+Compare current schedule and cost against the approved baseline. Returns variance analysis.
+Required: project_id
+
+**detect_narrative_divergence**
+Compare a written project narrative (highlight report, business case extract, minister brief) against quantitative data in the store. Classifies claims as SUPPORTED, CONTRADICTED, or UNVERIFIABLE. Returns divergence_score (0.0-1.0) and overall_assessment (ALIGNED / MINOR_DIVERGENCE / DIVERGENT / HIGHLY_DIVERGENT).
+Required: project_id, narrative_text
+Optional: confidence_threshold (default 0.6), focus_areas (list)
+Note: Directly targets optimism bias — a HIGHLY_DIVERGENT rating is a red flag requiring SRO attention.
+
+---
+
+### pm-validate — Validation (4 tools)
+
+Validates project data against structural, semantic, and compliance rules. No AI required.
+
+**validate_structure**
+Check that the project file conforms to its format schema. Returns structural errors and warnings.
+Required: file_path, format
+
+**validate_semantic**
+Check that the project data is internally consistent: tasks with predecessors that don't exist, milestones without owners, etc.
+Required: project_id
+
+**validate_nista**
+Check compliance against NISTA (Network Integrated Scheduling and Tracking Architecture) rules.
+Required: project_id
+Returns: pass/fail per rule with evidence
+
+**validate_custom**
+Apply a custom validation rule set (JSON schema) to project data.
+Required: project_id, rules_json
+
+---
+
+### pm-nista — GMPP Reporting and NISTA Integration (5 tools)
+
+Supports UK Government Major Projects Portfolio (GMPP) quarterly data returns and NISTA compliance.
+
+**generate_gmpp_report**
+Generate a GMPP quarterly data return from store data.
+Required: project_id, quarter (e.g. "Q1_2026")
+Optional: department, programme_name
+
+**generate_narrative**
+AI-generated GMPP narrative commentary section.
+Required: project_id
+Optional: max_words (default 250)
+
+**submit_to_nista**
+Submit a GMPP report to the NISTA API endpoint.
+Required: project_id, report_id, nista_endpoint, api_key
+
+**fetch_nista_metadata**
+Retrieve project metadata from the NISTA API.
+Required: project_id, nista_endpoint, api_key
+
+**validate_gmpp_report**
+Validate a GMPP report against the current NISTA schema before submission.
+Required: report_json
+
+---
+
+### pm-assure — Assurance Lifecycle (28 tools)
+
+The largest module. Implements the full IPA assurance framework across 10 capability modules (P1-P10), plus ARMM (P11), gate readiness (P13/P14), and the cross-module red flag scanner. Persists state to SQLite.
+
+**CORE ASSURANCE**
+
+**check_artefact_currency (P1)**
+Assess whether project artefacts (business case, risk register, benefits plan, etc.) are current or stale relative to the last review cycle.
+Required: project_id
+Optional: artefact_types (list), staleness_threshold_days (default 90)
+
+**nista_longitudinal_trend (P2)**
+Analyse NISTA compliance score trend over multiple review cycles.
+Required: project_id
+Optional: periods (default 6)
+
+**track_review_actions (P3)**
+Log review actions (conditions, recommendations) from gate reviews or assurance events.
+Required: project_id, actions (list of action objects)
+
+**review_action_status (P3)**
+Get current status of all review actions for a project.
+Required: project_id
+Optional: status_filter (enum: OPEN|CLOSED|RECURRING)
+
+**check_confidence_divergence (P4)**
+Check whether stated delivery confidence is consistent with objective indicators.
+Required: project_id
+Returns: divergence signal (STABLE|CONVERGENT|LOW_CONSENSUS|HIGH_DIVERGENCE)
+
+**recommend_review_schedule (P5)**
+AI-recommended review schedule based on project health, risk profile, and remaining timeline.
+Required: project_id
+
+**log_override_decision (P6)**
+Log an override of an AI assessment, with rationale.
+Required: project_id, assessment_type, original_value, override_value, rationale, override_by
+
+**analyse_override_patterns (P6)**
+Analyse override history for patterns suggesting systematic assessment bias.
+Required: project_id
+
+**ingest_lesson (P7)**
+Record a lessons learned entry in the legacy lessons_learned store.
+Required: project_id, title, description, category (enum: GOVERNANCE|DELIVERY|COMMERCIAL|TECHNICAL|PEOPLE|OTHER)
+Optional: sentiment, phase, department, tags
+
+**search_lessons (P7)**
+Search the legacy lessons_learned corpus by keyword.
+Required: query
+Optional: project_id, category, sentiment
+
+**log_assurance_activity (P8)**
+Log an assurance activity (review, workshop, audit) to the assurance activity log.
+Required: project_id, activity_type, outcome
+
+**analyse_assurance_overhead (P8)**
+Assess whether assurance activity is proportionate to project risk and phase.
+Required: project_id
+
+**run_assurance_workflow (P9)**
+Execute a multi-step assurance workflow and return composite health classification.
+Required: project_id, workflow_type (enum: FULL_ASSURANCE|QUICK_HEALTH|GATE_READINESS)
+Returns: health (HEALTHY|ATTENTION_NEEDED|AT_RISK|CRITICAL), signals, recommended_actions
+
+**get_workflow_history (P9)**
+Return history of assurance workflow executions for a project.
+Required: project_id
+Optional: limit (default 10)
+
+**classify_project_domain (P10)**
+Classify project into Cynefin complexity domain: CLEAR, COMPLICATED, COMPLEX, or CHAOTIC.
+Required: project_id
+
+**reclassify_from_store (P10)**
+Re-run domain classification using updated store data.
+Required: project_id
+
+**ASSUMPTIONS**
+
+**ingest_assumption (P12)**
+Record an assumption with owner, basis, and sensitivity classification.
+Required: project_id, assumption_text, owner, sensitivity (enum: HIGH|MEDIUM|LOW)
+Optional: category, expiry_date
+
+**validate_assumption (P12)**
+Mark an assumption as validated, invalidated, or converted to a risk.
+Required: project_id, assumption_id, new_status, evidence
+
+**get_assumption_drift (P12)**
+Identify assumptions that have drifted from their original basis.
+Required: project_id
+Returns: drift_score per assumption, summary of most-drifted assumptions
+
+**get_cascade_impact (P12)**
+Assess the cascade impact if a given assumption is invalidated.
+Required: project_id, assumption_id
+
+**GATE READINESS**
+
+**assess_gate_readiness (P13)**
+Score gate readiness across 7 weighted dimensions using store data. Returns score (0-100), DCA-aligned rating, per-dimension breakdown, and top gaps.
+Required: project_id, gate (enum: GATE_0|GATE_1|GATE_2|GATE_3|GATE_4|GATE_5)
+
+**get_gate_readiness_history (P13)**
+Return historical gate readiness scores for trend analysis.
+Required: project_id
+Optional: limit (default 10)
+
+**compare_gate_readiness (P14)**
+Compare two gate readiness assessments to identify improvement or deterioration.
+Required: project_id
+Optional: assessment_id_1, assessment_id_2 (if omitted, compares two most recent)
+
+**SETUP AND DASHBOARDS**
+
+**create_project_from_profile**
+Register a new project in the assurance store from a project profile object.
+Required: project_id, project_name, department, sro_name, current_gate
+
+**export_dashboard_data**
+Export all assurance panel data as static JSON for the UDS Renderer. Returns file path and renderer URL.
+Required: project_id, output_dir
+Optional: db_path
+
+**export_dashboard_html**
+Generate a standalone HTML assurance dashboard.
+Required: project_id
+Optional: output_path
+
+**get_armm_report (P11)**
+Run the Agent Readiness Maturity Model (ARMM) assessment: 251 criteria across 4 dimensions (TC, OR, GA, CC). Returns maturity level (0-4), score, dimension breakdown, blocking topics, and improvement priorities.
+Required: project_id
+
+**SCAN**
+
+**scan_for_red_flags**
+Cross-module red flag scanner. Queries risks, benefits, gate conditions, cost performance, change pressure, and resources simultaneously. Returns prioritised CRITICAL/HIGH/MEDIUM alert list with evidence trails and data_gaps.
+Required: project_id
+Optional: modules (list of modules to include, defaults to all)
+This is the recommended first tool call in any assurance session.
+
+---
+
+### pm-brm — Benefits Realisation Management (12 tools)
+
+Implements P3M3-aligned, Green Book-compliant benefits management. All tools persist to SQLite.
+
+**ingest_benefit**
+Register a benefit in the benefits register with full metadata: financial classification, recipient, baseline, target, KPI, owner.
+Required: project_id, title, category (enum: cash_releasing|non_cash_releasing|quantifiable|qualitative), recipient (enum: government|private|public), target_value, measurement_kpi, owner
+
+**track_benefit_measurement**
+Record a measurement of a benefit's KPI.
+Required: project_id, benefit_id, value, measured_at (ISO datetime), source
+
+**get_benefits_health**
+Return overall benefits health: RAG distribution, realisation percentage, at-risk benefits.
+Required: project_id
+
+**map_benefit_dependency**
+Record a dependency between two benefits (benefit A depends on benefit B being realised first).
+Required: project_id, dependent_benefit_id, dependency_benefit_id
+
+**get_benefit_dependency_network**
+Return the full benefit dependency network as a graph.
+Required: project_id
+
+**forecast_benefit_realisation**
+AI forecast of benefit realisation trajectory. Returns per-benefit confidence and aggregate programme forecast.
+Required: project_id
+Optional: horizon_months (default 24)
+
+**detect_benefits_drift**
+Detect benefits that have drifted from their approved targets (timing, magnitude, or both).
+Required: project_id
+
+**get_benefits_cascade_impact**
+Assess cascade impact of a single benefit failing to realise.
+Required: project_id, benefit_id
+
+**generate_benefits_narrative**
+AI-generated Green Book-aligned benefits narrative for board papers or gate review submissions.
+Required: project_id
+Optional: format (enum: executive_summary|gate_review|full_report)
+
+**assess_benefits_maturity**
+P3M3-aligned maturity assessment across 5 BRM dimensions. Returns maturity score (0-5) and improvement recommendations.
+Required: project_id
+
+**forecast_benefits_outturn**
+Derive overall benefits outturn confidence from financial/EV performance indicators. Projects each benefit forward and returns programme-level RAG (GREEN ≥95%, AMBER 80-94%, RED <80%).
+Required: project_id
+Optional: delivery_confidence_override (float 0-1)
+
+**get_benefits_realisation_trajectory**
+Build period-by-period cumulative planned vs actual from measurement records. Returns trend (AHEAD|ON_TRACK|BEHIND|NO_DATA) and trajectory chart data.
+Required: project_id
+Optional: periods (default 12), period_type (enum: monthly|quarterly)
+
+---
+
+### pm-portfolio — Portfolio Intelligence (5 tools)
+
+Cross-project analysis. Aggregates data from multiple projects in the store.
+
+**get_portfolio_health**
+Aggregate health rollup across all projects. Returns DCA distribution, portfolio confidence score, and projects requiring intervention.
+Optional: project_ids (list, defaults to all in store)
+
+**get_portfolio_gate_readiness**
+Cross-project gate readiness comparison.
+Optional: project_ids, gate (filter to a specific gate)
+
+**get_portfolio_brm_overview**
+Portfolio-level benefits realisation overview: aggregate expected value, at-risk benefits, realisation confidence.
+Optional: project_ids
+
+**get_portfolio_armm_summary**
+Cross-project ARMM maturity comparison.
+Optional: project_ids
+
+**get_portfolio_assumptions_risk**
+Identify assumptions that are shared across multiple projects — a systemic risk if the assumption proves false.
+Optional: project_ids
+
+---
+
+### pm-ev — Earned Value Analysis (2 tools)
+
+Earned Value Management aligned to APM, PMI, and IPA EVM guidance.
+
+**compute_ev_metrics**
+Compute full EV metric set: BCWP, BCWS, ACWP, SPI, CPI, EAC, TCPI, VAC, CV, SV.
+Required: project_id
+Returns: all metrics with plain-English interpretation, schedule/cost health classification
+
+**generate_ev_dashboard**
+Generate a standalone HTML Earned Value S-curve dashboard.
+Required: project_id
+Optional: output_path
+
+---
+
+### pm-synthesis — AI Health Summaries (2 tools)
+
+AI-generated executive summaries. Requires ANTHROPIC_API_KEY.
+
+**summarise_project_health**
+AI-generated executive health summary drawing on all available store data for a project.
+Required: project_id
+Optional: format (enum: brief|full|board_paper), audience (enum: sro|board|minister|technical)
+
+**compare_project_health**
+AI-generated comparison of two projects' health positions, identifying relative strengths and risks.
+Required: project_id_1, project_id_2
+Optional: focus_areas (list)
+
+---
+
+### pm-risk — Risk Register and Intelligence (9 tools)
+
+IPA and Cabinet Office MoR-aligned risk management. All tools persist to SQLite.
+
+**ingest_risk**
+Register a risk with full MoR metadata: category, likelihood (1-5), impact (1-5), owner, mitigation plan.
+Required: project_id, title, category, likelihood (int 1-5), impact (int 1-5), owner
+Optional: mitigation_plan, proximity, tolerance, escalation_path
+
+**update_risk_status**
+Update a risk's status, score, or mitigation progress.
+Required: project_id, risk_id
+Optional: status (enum: OPEN|CLOSED|TRANSFERRED|ESCALATED), likelihood, impact, mitigation_update
+
+**get_risk_register**
+Return the full risk register, sorted by risk score (likelihood × impact) descending.
+Required: project_id
+Optional: status_filter, category_filter, min_score
+
+**get_risk_heat_map**
+Return a 5×5 likelihood-impact heat map of all open risks.
+Required: project_id
+Returns: heat map data with risk counts per cell, colour coding (green/yellow/red zones)
+
+**ingest_mitigation**
+Record a mitigation action for a risk.
+Required: project_id, risk_id, action_description, owner, target_date
+
+**get_mitigation_progress**
+Return progress against all mitigation actions for a project.
+Required: project_id
+Optional: status_filter (enum: PLANNED|IN_PROGRESS|COMPLETE|OVERDUE)
+
+**get_portfolio_risks**
+Cross-project risk aggregation. Returns systemic risks (appearing in multiple projects), highest-scoring risks across the portfolio.
+Optional: project_ids
+
+**get_risk_velocity**
+Analyse how risk scores have changed between review cycles. High positive velocity = risk escalating.
+Required: project_id
+Optional: lookback_periods (default 3)
+
+**detect_stale_risks**
+Identify risks that have not been updated within the expected review cycle — a governance red flag.
+Required: project_id
+Optional: staleness_threshold_days (default 30)
+
+---
+
+### pm-change — Change Control (5 tools)
+
+Change control log aligned to Cabinet Office project controls guidance.
+
+**log_change_request**
+Record a change request with category, impact assessment, and required approval level.
+Required: project_id, title, description, category (enum: SCOPE|SCHEDULE|BUDGET|RESOURCE|OTHER)
+Optional: cost_impact, schedule_impact_days, requester, priority
+
+**update_change_status**
+Update a change request's status through the approval workflow.
+Required: project_id, change_id, new_status (enum: SUBMITTED|UNDER_REVIEW|APPROVED|REJECTED|WITHDRAWN)
+Optional: decision_rationale, decided_by
+
+**get_change_log**
+Return all change requests with their current status.
+Required: project_id
+Optional: status_filter, category_filter
+
+**get_change_impact_summary**
+Summarise the aggregate cost and schedule impact of all approved changes against the approved baseline.
+Required: project_id
+
+**analyse_change_pressure**
+Detect whether the change request volume and pattern indicates scope instability or governance weakness.
+Required: project_id
+Returns: change pressure classification (LOW|MEDIUM|HIGH|CRITICAL) with evidence
+
+---
+
+### pm-resource — Resource Capacity Planning (5 tools)
+
+Resource management aligned to IPA resource planning guidance.
+
+**analyse_resource_loading**
+Analyse resource utilisation across all tasks. Returns over/under-loaded resources and peak demand periods.
+Required: project_id
+
+**detect_resource_conflicts**
+Identify resources allocated to overlapping tasks where total demand exceeds capacity.
+Required: project_id
+Optional: conflict_threshold_pct (default 100, i.e. over-allocation)
+
+**get_critical_resources**
+Identify resources on the critical path or where single-person dependencies create delivery risk.
+Required: project_id
+
+**log_resource_plan**
+Record a resource plan (headcount, FTE, roles, time periods) to the store.
+Required: project_id, resource_plan (list of resource objects)
+
+**get_portfolio_capacity**
+Cross-project capacity analysis: which resources are committed across multiple projects, and where conflicts exist.
+Optional: project_ids
+
+---
+
+### pm-financial — Financial Management (5 tools)
+
+Budget management aligned to HM Treasury Green Book and Cabinet Office financial controls.
+
+**set_financial_baseline**
+Record the approved financial baseline (Budget at Completion, profile by period).
+Required: project_id, total_budget, periods (list of period budget objects), approved_at (ISO date)
+Optional: optimism_bias_pct, contingency_pct
+
+**log_financial_actuals**
+Record actual expenditure for a period.
+Required: project_id, period, actual_spend, period_end_date
+Optional: source, notes
+
+**get_cost_performance**
+Return cost performance: BAC, EAC, actual spend to date, forecast remaining, CPI (budget-based), and variance analysis.
+Required: project_id
+
+**log_cost_forecast**
+Record an updated Estimate at Completion (EAC).
+Required: project_id, eac, forecast_date
+Optional: basis_of_estimate, approved_by
+
+**get_spend_profile**
+Return the spend profile: planned vs actual by period, cumulative S-curve data.
+Required: project_id
+Optional: include_forecast (boolean, default true)
+
+---
+
+### pm-knowledge — IPA Knowledge Base (8 tools)
+
+Pre-loaded with benchmark data from IPA Annual Reports 2019-2024, 8 evidence-based failure patterns, and IPA/HMT/Cabinet Office guidance references. No AI required — all responses are deterministic.
+
+**list_knowledge_categories**
+List all available knowledge categories and their content summary.
+No required parameters.
+
+**get_benchmark_data**
+Return IPA benchmark statistics for a given programme type and metric.
+Required: category (enum: cost_overrun|schedule_overrun|dca_distribution|gate_outcomes|programme_type)
+Optional: programme_type (enum: IT|infrastructure|transformation|defence|other)
+
+**get_failure_patterns**
+Return the 8 IPA-documented delivery failure patterns with diagnostic questions.
+Optional: pattern_id (if omitted, returns all 8)
+
+**get_ipa_guidance**
+Return IPA/HMT/Cabinet Office guidance references for a topic.
+Required: topic (string)
+Returns: guidance title, source, URL, key principles
+
+**search_knowledge_base**
+Keyword search across all knowledge base content.
+Required: query
+
+**run_reference_class_check**
+Compare a project's cost or schedule estimate against the IPA reference class for comparable projects. Returns optimism bias assessment and confidence interval.
+Required: project_id, estimate_type (enum: cost|schedule), programme_type
+Optional: estimate_value (if not in store)
+
+**get_benchmark_percentile**
+Return what percentile a specific value falls in relative to the IPA benchmark distribution.
+Required: metric (enum: cost_overrun_pct|schedule_overrun_pct), value, programme_type
+
+**generate_premortem_questions**
+Generate structured pre-mortem challenge questions for a gate review panel, targeting known cognitive failure modes (optimism bias, groupthink, planning fallacy).
+Required: project_id, gate (enum: GATE_0 through GATE_5)
+Optional: focus_areas (list)
+
+---
+
+### pm-simulation — Monte Carlo Schedule Simulation (2 tools)
+
+Probabilistic schedule simulation using PERT and triangular distributions. No AI required.
+
+**run_schedule_simulation**
+Run a Monte Carlo schedule simulation. Uses PERT distributions for task durations. Optionally calibrates uncertainty ranges using risk register likelihood/impact scores.
+Required: project_id
+Optional: iterations (default 1000, max 10000), use_risk_register (boolean, default true), seed (for reproducibility)
+Returns: P50/P80/P90 delivery dates in days from baseline, distribution statistics, persists to store
+
+**get_simulation_results**
+Retrieve results from the most recent schedule simulation.
+Required: project_id
+Optional: simulation_type (enum: schedule|cost, default schedule)
+Returns: P50, P80, P90, mean, std_dev, date range, run metadata
+
+---
+
+### pm-lessons — Lessons Learned (5 tools)
+
+AI extraction of structured lessons from gate review reports and PIRs, with cross-project corpus search and pattern analysis. Uses separate `lessons` table (distinct from pm-assure's legacy lessons_learned table).
+
+**extract_lessons**
+AI extraction of structured lessons from gate review report or PIR text. Each lesson is classified by category, phase, severity, root_cause, recommendation, and source_excerpt. Stores results in the lessons corpus.
+Required: project_id, text, document_type (enum: GATE_REVIEW|PIR|LESSONS_WORKSHOP|OTHER)
+Optional: gate (enum: GATE_0 through GATE_5|PAR), db_path
+Requires ANTHROPIC_API_KEY.
+
+**get_project_lessons**
+Retrieve all stored lessons for a project.
+Required: project_id
+Optional: category (enum: GOVERNANCE|DELIVERY|COMMERCIAL|TECHNICAL|PEOPLE), gate, db_path
+
+**search_project_lessons**
+Keyword search across ALL lessons in the store (all projects). Returns matching lessons with their project_id.
+Required: query
+Optional: category, min_severity (enum: HIGH|MEDIUM|LOW), db_path
+
+**get_systemic_patterns**
+AI analysis of the full lessons corpus to identify patterns recurring across multiple projects. Requires at least 5 lessons in the store.
+Optional: min_occurrences (default 2), category, db_path
+Returns: ranked patterns with occurrences, projects_affected, evidence, portfolio-level recommendation.
+Requires ANTHROPIC_API_KEY.
+
+**generate_lessons_section**
+AI-written lessons learned section for inclusion in a PIR, gate review report, or executive brief.
+Required: project_id
+Optional: format (enum: pir|gate_review|brief, default pir), max_lessons (default 10), db_path
+Requires ANTHROPIC_API_KEY.
+
+---
+
+### pm-reporting — Governance Document Generation (6 tools)
+
+IPA-format governance documents, SRO dashboards, and UDS-compatible dashboard export. Claude-powered tools require ANTHROPIC_API_KEY.
+
+**generate_gate_review_summary**
+Generate a formal IPA Gate Review Summary document. Gathers store data and uses Claude to produce: DCA rating, Executive Summary, Strengths, Areas Requiring Management Attention, CONDITIONS, Recommended Actions, and per-dimension RAG assessment across all 8 IPA dimensions.
+Required: project_id, gate_number (int 0-5)
+Optional: reviewer_name, include_recommendations (boolean, default true)
+Requires ANTHROPIC_API_KEY.
+
+**generate_sro_dashboard**
+Generate a one-page SRO dashboard as markdown. Deterministic — no AI required. Assembles: DCA rating, gate stage, open change requests, schedule P50, EAC vs BAC, top 5 risks, top 5 benefits, key actions.
+Required: project_id
+
+**generate_board_exception_report**
+Board-format exception report in Situation / Implication / Decision Required structure. Translates technical data into board language. Returns 2-5 exception items plus Recommended Board Resolution.
+Required: project_id
+Optional: reporting_period (string, e.g. "Q1 2026/27")
+Requires ANTHROPIC_API_KEY.
+
+**generate_portfolio_summary**
+Cross-project portfolio narrative for investment committees. Portfolio scorecard table, health narrative, common themes and systemic risks, recommended interventions.
+Required: project_ids (list of strings)
+Optional: portfolio_name
+Requires ANTHROPIC_API_KEY.
+
+**generate_pir_template**
+Post-Implementation Review template pre-populated with store data. Includes delivery performance vs business case, benefits delivery, risks that materialised, lessons learned (from pm-lessons if available), and [PLACEHOLDER] markers where human input is needed.
+Required: project_id
+Optional: closure_date (ISO date string)
+Requires ANTHROPIC_API_KEY.
+
+**export_sro_dashboard_data**
+Export SRO dashboard metrics as static JSON for the Universal Dashboard Specification (UDS) Renderer. Writes JSON to output_dir and returns renderer URL: http://localhost:5173/?dashboard=sro-dashboard.uds.yaml&project_id=X&data_mode=static
+Required: project_id, output_dir
+Optional: db_path
+
+---
+
+## IPA Gate Review Methodology — System Prompt
+
+Use this system prompt to configure an LLM as an experienced IPA gate reviewer. Copy and paste as the system prompt before providing project documentation.
+
+---
+
+You are an experienced reviewer working under the UK Infrastructure and Projects Authority (IPA) Gate Review framework. You assess government programmes and projects at formal review points (Gates 0-5), produce Delivery Confidence Assessment (DCA) ratings, and provide evidence-based recommendations. Your outputs must follow IPA conventions in structure, language, and rigour.
+
+GATE STRUCTURE
+
+Gate 0 — Strategic Assessment: Is the programme or project justified? Does it align to departmental and cross-government strategy? Is there a realistic, proportionate delivery option?
+
+Gate 1 — Business Justification: Is there a robust, HM Treasury-compliant business case? Is the preferred option clearly justified against alternatives? Is funding identified and realistic? Optimism bias must be applied at this stage.
+
+Gate 2 — Delivery Strategy: Is the procurement or delivery strategy sound? Are potential suppliers identified? Is the commercial approach appropriate for the risk profile? Has the market been tested?
+
+Gate 3 — Investment Decision: Is the project ready to proceed to full implementation? Are contracts let? Is the delivery team in place? Is the full business case approved and funding confirmed?
+
+Gate 4 — Readiness for Service: Is the project ready to go live? Have risks to go-live been identified and mitigated? Is the business ready to accept the change?
+
+Gate 5 — Operational Review and Benefits Realisation: Are the intended benefits being realised? Is the service operating as intended? Have lessons been captured and shared?
+
+DCA RATING SCALE
+
+Green — Successful delivery on time, to budget, and to quality appears highly likely. No major outstanding issues.
+Amber/Green — Successful delivery appears probable. Some issues exist but are manageable with planned actions.
+Amber — Successful delivery appears feasible but significant issues require close management attention and active intervention.
+Amber/Red — Successful delivery appears at risk. Urgent action needed. Escalation to SRO or board may be required.
+Red — Successful delivery appears unachievable in current form. Fundamental issues require immediate intervention or reset.
+
+EIGHT ASSESSMENT DIMENSIONS
+
+1. Strategic Context and Benefits — benefits are specific and measurable, named benefits owner identified and accountable, linked to departmental strategic objectives, benefits realisation plan exists and is current.
+
+2. Leadership and Stakeholder Management — experienced, empowered SRO with sufficient time and authority, engaged sponsor, clear governance structures, up-to-date stakeholder map.
+
+3. Risk Management — live risk register with named owners, mitigating actions resourced and tracked, tolerance levels agreed, risks escalated when thresholds breached.
+
+4. Governance and Assurance — clear decision-making structures, RACI understood by the team, independent assurance at appropriate points, project board meeting regularly with meaningful agendas.
+
+5. Financials — approved business case with realistic cost estimates, optimism bias applied per Green Book, funding confirmed, actuals tracked against forecast.
+
+6. Delivery Approach and Schedule — realistic resource-loaded schedule, critical path understood and actively managed, contingency built in, change control process in place.
+
+7. People and Capability — right skills and experience in place for current stage, key-person dependencies identified, succession planning for key roles.
+
+8. Commercial and Procurement — contract type appropriate to risk profile, supplier capability and financial health assessed, robust contract management, exit provisions understood.
+
+COMMON RED FLAGS (highlight explicitly when present)
+
+- Optimism bias not applied or not reflected in cost and schedule estimates
+- Benefits owner not identified, or benefits not measurable
+- SRO with insufficient time, authority, or seniority
+- Risk register not actively managed — risks not updated, owners not engaged
+- Schedule with no float on critical path and no programme-level contingency
+- Business case approved but not kept current as the project evolves
+- Key dependencies on other projects or third parties not tracked or owned
+- Governance structures confused or overlapping — unclear escalation routes
+- Assumptions not challenged, validated, or converted to risks
+- Scope creep occurring outside formal change control
+
+CONDITIONS AND RECOMMENDATIONS
+
+Conditions are blocking requirements. A condition must be met before the project may proceed. Format: "The project may not proceed to [next gate/stage] until [specific requirement] has been met and confirmed to [named authority]."
+
+Recommendations are advisory. They represent improvements that would increase delivery confidence but do not block progression. Format: "It is recommended that [owner role] [specific action] by [date/milestone]."
+
+A gate review with no conditions is rare for a project rated Amber or below. If you have no conditions for an Amber/Red or Red project, reconsider whether findings are correctly classified.
+
+GATE-SPECIFIC ARTEFACT REQUIREMENTS
+
+Gate 0: Strategic outline/mandate, high-level options appraisal, senior leadership endorsement, initial stakeholder map.
+Gate 1: SOBC approved (where applicable), initial benefits register, initial risk register, SRO confirmed, delivery options assessed.
+Gate 2: OBC approved, procurement strategy documented, market engagement evidence, supplier shortlist, updated benefits and risk registers.
+Gate 3: FBC approved (where applicable), contracts let, delivery team in place, schedule baselined, benefits realisation plan approved, funding confirmed.
+Gate 4: Implementation plan complete, UAT sign-off, operational readiness assessment, training and comms plan executed, go-live checklist signed off, hypercare plan in place.
+Gate 5: Benefits realisation report, PIR report, lessons learned log shared, operational service performance data, updated whole-life cost assessment.
+
+OUTPUT FORMAT
+
+DELIVERY CONFIDENCE ASSESSMENT: [RATING]
+
+Executive Summary
+[2-3 sentences: overall DCA, primary reasons, most important action required]
+
+Strengths
+[Bullet list of genuine strengths evidenced by documentation]
+
+Areas Requiring Management Attention
+[Bullet list of specific issues, each clearly described]
+
+Conditions
+[Conditions that must be met before the project may proceed. If none: "No conditions — project may proceed subject to recommendations below."]
+
+Recommended Actions
+1. [Owner role] — [Specific action] — by [target date or milestone]
+
+Assessment by Dimension
+[For each of the 8 dimensions: RAG rating and 2-3 sentences of evidence-based assessment. Where evidence is absent, state: "Evidence was not available to assess [dimension]."]
+
+---
+
+## Role System Prompts
+
+### Senior Responsible Owner (SRO)
+
+You are an expert adviser to a Senior Responsible Owner (SRO) for a UK government major project or programme. The SRO is personally accountable to the board and minister for successful delivery.
+
+Your role is to provide strategic, board-ready analysis. You must:
+- Lead with delivery confidence and outcome risk — not operational detail.
+- Frame everything in terms of impact on strategic objectives and public value.
+- Distinguish clearly between what needs a decision NOW versus what is being monitored.
+- Pitch recommendations at the level of governance decisions and escalation triggers — never at task-level actions.
+- State risks in terms of consequence to the programme's business case and ministerial commitments.
+- Highlight benefits realisation: are expected benefits on track? Are benefit owners identified and accountable?
+- Keep outputs concise. Prefer summaries, executive bullets, and short narrative.
+- Use plain, authoritative language. Avoid technical jargon. If something is a risk, say so directly.
+- Where you are uncertain or evidence is incomplete, say so.
+- Where the SRO holds delegated Accounting Officer responsibility, flag any findings with financial regularity, propriety, or value-for-money implications.
+
+Always close with a clear, direct answer to the question being asked.
+
+### Project Manager (PM)
+
+You are an expert project delivery adviser to a Project Manager working on a UK government major project.
+
+Your role is to provide operational, action-oriented analysis. You must:
+- Use specific numbers wherever possible: milestone dates, cost variances, EAC vs BAC, schedule float, resource utilisation.
+- Focus on the next 90 days. Identify what is due, what is at risk, and what decisions are needed imminently.
+- Give RAG ratings per workstream with a one-line explanation of each.
+- Clearly distinguish between issues the PM can resolve and issues requiring escalation — with a recommendation on which.
+- Identify critical path items and flag any tasks where float has been consumed.
+- For resource issues, name the problem specifically: who is overloaded, what skills are missing.
+- Suggest concrete next actions with a suggested owner and target date.
+- Do not soften bad news. If the project is in trouble, say so plainly.
+
+End every assessment with a prioritised action list: what to do first, what to escalate, what to monitor.
+
+### Independent Assurance Reviewer
+
+You are an expert independent assurance reviewer with deep experience in UK government major projects, IPA Gate Reviews, and Departmental Assurance Reviews.
+
+Your role is to apply professional scepticism. You must:
+- Assess against the eight IPA Gate Review dimensions.
+- Distinguish clearly between what the data shows and what is claimed in the programme narrative.
+- Look actively for what is absent: missing contingency, schedules with no float, benefits without named owners, assumptions not validated.
+- Flag overoptimism: costs at P50 without P80 mention; schedules assuming no rework; benefits projections based on unvalidated demand forecasts.
+- Use the DCA rating scale: Green, Amber-Green, Amber, Amber-Red, Red.
+- Identify inconsistencies between documents, between stated progress and actual evidence.
+- Frame findings constructively but do not moderate them to protect sensitivities.
+
+Conclude with: overall DCA rating, top three findings affecting delivery confidence, and recommended conditions or actions.
+
+### Portfolio Manager
+
+You are an expert portfolio management adviser supporting a Portfolio Manager overseeing multiple major projects in UK government.
+
+Your role is to provide comparative, cross-portfolio analysis. You must:
+- Lead with aggregate portfolio health: DCA distribution and what it means.
+- Identify systemic risks: shared suppliers, key individuals, common technology dependencies.
+- Flag resource conflicts where the same team or skill is committed to multiple projects simultaneously.
+- Surface interdependencies: projects depending on outputs from other projects.
+- Compare spending and forecast across the portfolio.
+- Distinguish projects requiring active intervention from those that can be monitored.
+- Use portfolio-level framing: "X of Y projects are...", "across the portfolio...", "three projects share the same..."
+
+Close with a clear prioritised view of where the Portfolio Manager should focus attention and why.
+
+---
+
+## Analytical Workflows
+
+### Workflow 1: Full Gate Readiness Analysis (13 steps)
+
+Use with the IPA Gate Review Methodology system prompt. Replace [PROJECT_ID] with the actual identifier.
+
+Step 1 — get_project_summary(project_id="[PROJECT_ID]") — Record: name, phase, gate target, budget, forecast, dates.
+Step 2 — assess_gate_readiness(project_id="[PROJECT_ID]") — Record: readiness rating, score, top 3 gaps, unmet mandatory criteria.
+Step 3 — get_gate_readiness_history(project_id="[PROJECT_ID]") — Determine: is readiness improving, stable, or deteriorating?
+Step 4 — compare_gate_readiness(project_id="[PROJECT_ID]") — Note: which dimensions improved/deteriorated?
+Step 5 — check_artefact_currency(project_id="[PROJECT_ID]") — Flag: missing or stale artefacts.
+Step 6 — get_risk_register(project_id="[PROJECT_ID]") — Assess: High/Very High risks, named owners, active mitigations.
+Step 7 — get_assumption_drift(project_id="[PROJECT_ID]") — Identify: most-drifted assumptions underpinning key estimates.
+Step 8 — get_cost_performance(project_id="[PROJECT_ID]") — Record: CPI, EAC vs BAC, variance trends.
+Step 9 — check_confidence_divergence(project_id="[PROJECT_ID]") — Flag: dimensions where stated confidence exceeds evidence.
+Step 10 — get_armm_report(project_id="[PROJECT_ID]") — Extract: maturity level, blocking topics, top improvement priorities.
+Step 11 — suggest_mitigations(project_id="[PROJECT_ID]") — Review: AI-flagged priority mitigations vs current gaps.
+Step 12 — run_assurance_workflow(project_id="[PROJECT_ID]", workflow_type="FULL_ASSURANCE") — Record: HEALTHY/ATTENTION_NEEDED/AT_RISK/CRITICAL classification.
+Step 13 — Synthesise all findings into a complete IPA Gate Review output with DCA rating across all 8 dimensions.
+
+### Workflow 2: Benefits Realisation Review (9 steps)
+
+Step 1 — get_project_summary — Record: strategic objectives, approved benefits plan, current phase.
+Step 2 — get_benefits_health — Record: RAG distribution, on track vs at risk vs off track.
+Step 3 — forecast_benefit_realisation — Assess: which benefits forecast on time and in full vs shortfall.
+Step 4 — detect_benefits_drift — Identify: benefits drifted furthest from approved targets.
+Step 5 — get_benefit_dependency_network — Understand: dependency chains, single points of failure.
+Step 6 — get_benefits_cascade_impact (for each at-risk benefit) — Assess: cascade if benefit fails.
+Step 7 — assess_benefits_maturity — Rate: P3M3 BRM maturity across 5 dimensions.
+Step 8 — forecast_benefits_outturn — Derive: programme-level benefits RAG from financial/EV performance.
+Step 9 — generate_benefits_narrative — Produce: Green Book-aligned narrative for board paper.
+
+### Workflow 3: Schedule and Cost Health Review (11 steps)
+
+Step 1 — get_project_summary — Record: budget, forecast dates, current phase.
+Step 2 — get_critical_path — Identify: critical path, float remaining on key tasks.
+Step 3 — compute_ev_metrics — Record: SPI, CPI, EAC, TCPI, CV, SV with interpretation.
+Step 4 — run_schedule_simulation — Get: P50/P80/P90 delivery dates.
+Step 5 — get_simulation_results — Extract: distribution statistics, confidence intervals.
+Step 6 — detect_outliers (metric="duration") — Flag: tasks with anomalous duration estimates.
+Step 7 — run_reference_class_check (estimate_type="cost") — Compare: cost estimate vs IPA benchmarks.
+Step 8 — get_risk_velocity — Assess: which risks are escalating, how fast.
+Step 9 — detect_stale_risks — Flag: risks not updated within review cycle.
+Step 10 — analyse_change_pressure — Assess: change request volume and scope stability.
+Step 11 — Synthesise into schedule and cost health report with SPI/CPI RAG, delivery confidence interval, and recommended actions.
+
+---
+
+## Architecture notes
+
+The platform is a Python monorepo with four packages:
+
+- **pda-platform** — meta-package, pip install pda-platform installs everything
+- **pm-data-tools** — core library: parsers, validators, AssuranceStore (SQLite at ~/.pm_data_tools/store.db)
+- **pm-mcp-servers** — the 17 MCP modules and 116 tools
+- **agent-task-planning** — AI reliability layer: confidence extraction, outlier mining
+
+Transport: stdio (Claude Desktop) or SSE (remote clients). The unified server exposes all 116 tools through a single connection — no need to connect to individual module servers.
+
+Persistence: AssuranceStore is a SQLite database that accumulates structured project data across sessions. Most tools that write to the store accept an optional db_path parameter to target a specific file. Default location: ~/.pm_data_tools/store.db.
+
+AI tools: Tools that call Claude use claude-3-5-haiku-20241022 for structured extraction (lessons, risk analysis, divergence detection) and claude-3-5-haiku-20241022 for narrative generation (reports, summaries, PIR templates). ANTHROPIC_API_KEY must be set in the environment. Deterministic tools (EV metrics, risk heat maps, Monte Carlo simulation, knowledge base queries) have no API dependency.
+
+---
+
+End of PDA Platform LLM reference.
