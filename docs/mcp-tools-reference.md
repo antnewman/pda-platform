@@ -1,8 +1,8 @@
 # PDA Platform — MCP Tools Reference
 
-**Version:** 2.0 | **Total tools:** 99 | **Modules:** 14
+**Version:** 2.1 | **Total tools:** 116 | **Modules:** 17
 
-This reference documents all 99 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
+This reference documents all 116 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
 
 ---
 
@@ -24,6 +24,9 @@ This reference documents all 99 MCP tools available in the PDA Platform, coverin
 - [pm-resource — Resource Capacity Planning](#pm-resource--resource-capacity-planning)
 - [pm-financial — Financial Management](#pm-financial--financial-management)
 - [pm-knowledge — IPA Knowledge Base](#pm-knowledge--ipa-knowledge-base)
+- [pm-simulation — Monte Carlo Schedule Simulation](#pm-simulation--monte-carlo-schedule-simulation)
+- [pm-lessons — Lessons Learned and Institutional Memory](#pm-lessons--lessons-learned-and-institutional-memory)
+- [pm-reporting — Governance Document Generation](#pm-reporting--governance-document-generation)
 
 ---
 
@@ -57,11 +60,11 @@ Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) c
 | Module | Tools | Purpose |
 |--------|-------|---------|
 | pm-data | 6 | Load project files, query tasks, dependencies, and critical path |
-| pm-analyse | 6 | AI-powered risk identification, forecasting, health assessment |
+| pm-analyse | 7 | AI-powered risk identification, forecasting, health assessment |
 | pm-validate | 4 | Structural, semantic, NISTA, and custom validation |
 | pm-nista | 5 | GMPP quarterly reporting and NISTA API submission |
-| pm-assure | 27 | Full assurance lifecycle covering P1–P14 |
-| pm-brm | 10 | Benefits Realisation Management aligned to IPA/Green Book (P13) |
+| pm-assure | 28 | Full assurance lifecycle covering P1–P14 |
+| pm-brm | 12 | Benefits Realisation Management aligned to IPA/Green Book (P13) |
 | pm-portfolio | 5 | Cross-project portfolio aggregation and health rollup |
 | pm-ev | 2 | Earned Value metrics (SPI/CPI/EAC/TCPI) and HTML dashboard |
 | pm-synthesis | 2 | AI-generated executive health summaries and cross-project comparison |
@@ -70,7 +73,10 @@ Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) c
 | pm-resource | 5 | Resource loading, conflict detection, portfolio capacity planning |
 | pm-financial | 5 | Budget baseline, period actuals, EAC forecasting, spend profile |
 | pm-knowledge | 8 | IPA benchmarks, failure patterns, guidance, reference class checks |
-| **Total** | **99** | One unified endpoint |
+| pm-simulation | 2 | Monte Carlo schedule simulation — P50/P80/P90 delivery dates |
+| pm-lessons | 5 | AI lessons extraction from gate reviews/PIRs, systemic pattern analysis |
+| pm-reporting | 6 | Gate review summaries, SRO dashboards, board exception reports, PIR templates |
+| **Total** | **116** | One unified endpoint |
 
 ---
 
@@ -2027,4 +2033,253 @@ Generate structured pre-mortem challenge questions for an IPA gate review. Quest
 
 ---
 
-*Reference generated: 10 April 2026. For tool implementation details see the module source directories. For schema definitions see `docs/data-model-reference.md`.*
+## pm-simulation — Monte Carlo Schedule Simulation
+
+Two tools for probabilistic schedule forecasting using PERT/triangular distributions. Results are persisted to the store and can be fed into reporting tools.
+
+---
+
+### `run_schedule_simulation`
+**Module:** pm-simulation
+
+Run a Monte Carlo schedule simulation for a project using PERT/triangular distributions. Samples task durations across N iterations to produce a probability distribution of project completion. Returns P50, P80, and P90 confidence intervals with corresponding calendar dates. Optionally derives uncertainty from the project's risk register — higher aggregate risk scores widen duration distributions. Results are persisted and retrievable via `get_simulation_results`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier to simulate. |
+| n_simulations | integer | No | `1000` | Monte Carlo iterations. Min: 100, Max: 10000. |
+| confidence_levels | array of integers | No | `[50, 80, 90]` | Percentile confidence levels to compute. |
+| use_risk_register | boolean | No | `true` | If true, derives task uncertainty from the project risk register. Higher aggregate risk scores widen distributions. |
+| base_uncertainty_pct | number | No | `20.0` | Base uncertainty percentage applied to task durations when no risk data is available. ±20% means each task duration is sampled within a 20% range. Risk register data scales this up when `use_risk_register=true`. |
+| project_start_date | string | No | today | Project start date (YYYY-MM-DD) used to compute P50/P80/P90 calendar dates. |
+| baseline_duration_days | integer | No | — | Known baseline total duration in days. Required when no tasks are loaded for this `project_id`; overrides derivation from stored task data. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** `project_id`, `run_id`, `n_simulations`, `baseline_duration_days`, `results` object with `p50_days`/`p80_days`/`p90_days`/`mean_days`/`std_deviation_days`, calendar dates (`p50_date`, `p80_date`, `p90_date`), `baseline_probability_pct`, `risk_adjustment_applied`, `risk_multiplier`, `effective_uncertainty_pct`, plain-English `interpretation`, and `run_at` timestamp.
+
+**Example prompt:** "Run a Monte Carlo simulation for project ALPHA-1. Use 2000 iterations and incorporate the risk register."
+
+---
+
+### `get_simulation_results`
+**Module:** pm-simulation
+
+Retrieve the latest stored Monte Carlo simulation result for a project. Use after `run_schedule_simulation` to surface results in a report or dashboard, or to check whether an up-to-date simulation exists before running a new one.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier to retrieve results for. |
+| simulation_type | string | No | `"schedule"` | Type of simulation to retrieve. Currently only `"schedule"` is supported. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** Full simulation record with `p50_days`/`p80_days`/`p90_days`, calendar dates, `mean_duration_days`, `std_deviation_days`, `run_at`, and the original `parameters` object. If no result is found, returns `{"error": ..., "project_id": ..., "simulation_type": ...}`.
+
+**Example prompt:** "What were the P80 and P90 delivery dates from the last simulation run for project ALPHA-1?"
+
+---
+
+## pm-lessons — Lessons Learned and Institutional Memory
+
+Five tools for extracting structured lessons from gate review reports and PIRs, querying the lessons corpus, detecting systemic patterns across a portfolio, and generating formatted lessons sections for governance documents. AI-powered tools require `ANTHROPIC_API_KEY`.
+
+The pm-lessons tools use a dedicated `lessons` table. This is separate from the `lessons_learned` table used by pm-assure's OPAL-7 corpus. Use `search_project_lessons` (this module) for structured PIR/gate review extractions; use `search_lessons` (pm-assure) for the OPAL-7 IPA benchmark corpus.
+
+---
+
+### `extract_lessons`
+**Module:** pm-lessons
+
+Extract structured lessons from a gate review report or PIR using AI (Claude). Parses the supplied text, identifies concrete lessons, classifies each by category, severity, lifecycle phase, root cause, and actionable recommendation, and persists them to the lessons store. Requires `ANTHROPIC_API_KEY`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier (e.g. `PROJ-001`). |
+| text | string | Yes | — | Full text of the gate review report or PIR. |
+| document_type | string | Yes | — | Source document type. One of: `GATE_REVIEW`, `PIR`, `LESSONS_WORKSHOP`, `OTHER`. |
+| gate | string | No | — | Optional IPA gate stage to annotate all extracted lessons. One of: `GATE_0`, `GATE_1`, `GATE_2`, `GATE_3`, `GATE_4`, `GATE_5`, `PAR`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** `project_id`, `document_type`, `gate`, `lessons_extracted` count, and `lessons` array. Each lesson contains: `id`, `project_id`, `document_type`, `gate`, `phase`, `category` (GOVERNANCE/DELIVERY/COMMERCIAL/TECHNICAL/PEOPLE), `title`, `root_cause`, `recommendation`, `severity` (HIGH/MEDIUM/LOW), `source_excerpt`, and `model`.
+
+**Example prompt:** "Extract lessons from this Gate 3 review report for project ALPHA-1."
+
+---
+
+### `get_project_lessons`
+**Module:** pm-lessons
+
+Retrieve all stored lessons for a project. Optionally filter by category and/or gate stage.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| category | string | No | — | Filter by category. One of: `GOVERNANCE`, `DELIVERY`, `COMMERCIAL`, `TECHNICAL`, `PEOPLE`. |
+| gate | string | No | — | Filter by gate stage (e.g. `GATE_2`, `PAR`). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** `project_id`, `filters` applied, `count`, and `lessons` array with full lesson records.
+
+**Example prompt:** "Show me all GOVERNANCE lessons stored for project ALPHA-1."
+
+---
+
+### `search_project_lessons`
+**Module:** pm-lessons
+
+Search across ALL lessons in the store — not just one project. Keyword matching on `title`, `root_cause`, and `recommendation` fields. Returns lessons with their `project_id` so you know which project each lesson came from. Useful for portfolio managers querying institutional memory (e.g. "What do we know about supplier dependency failures at Gate 3?"). Optionally filter by category and minimum severity.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| query | string | Yes | — | Keyword search query. |
+| category | string | No | — | Filter by category. One of: `GOVERNANCE`, `DELIVERY`, `COMMERCIAL`, `TECHNICAL`, `PEOPLE`. |
+| min_severity | string | No | — | Minimum severity threshold. `HIGH` returns only HIGH; `MEDIUM` returns MEDIUM and HIGH; `LOW` returns all. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** `query`, `filters` applied, `count`, and `lessons` array with full lesson records including `project_id`.
+
+**Example prompt:** "Search all lessons for anything related to 'supplier' failures at MEDIUM severity or above."
+
+---
+
+### `get_systemic_patterns`
+**Module:** pm-lessons
+
+Load all lessons from the store and use AI to identify patterns recurring across multiple projects — surfacing systemic portfolio issues rather than one-off problems. Returns ranked patterns with supporting project evidence and recommendations. Requires at least 5 lessons in the store. Requires `ANTHROPIC_API_KEY`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| min_occurrences | integer | No | `2` | Minimum number of lessons a pattern must appear in to be reported. |
+| category | string | No | — | Analyse only lessons in this category. One of: `GOVERNANCE`, `DELIVERY`, `COMMERCIAL`, `TECHNICAL`, `PEOPLE`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** `total_lessons_analysed`, `filters`, `patterns_found`, and `patterns` array (sorted by `occurrences` descending). Each pattern contains: `pattern` description, `category`, `occurrences`, `projects_affected` list, `evidence` (lesson titles), and `recommendation`. Returns `{"status": "insufficient_data", ...}` if fewer than 5 lessons exist.
+
+**Example prompt:** "Identify systemic patterns in GOVERNANCE lessons across all our projects."
+
+---
+
+### `generate_lessons_section`
+**Module:** pm-lessons
+
+Retrieve stored lessons for a project and use AI to write a formatted lessons learned section suitable for inclusion in a PIR, gate review report, or executive brief. Returns markdown. If no lessons are stored, returns a template with guidance. Requires `ANTHROPIC_API_KEY`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| max_lessons | integer | No | `10` | Maximum lessons to include. |
+| format | string | No | `"pir"` | Output format. One of: `pir` (narrative grouped by category, root causes summarised, recommendations prioritised), `gate_review` (concise bullets focused on risks to future phases), `brief` (3–5 key lessons for an executive summary). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** Markdown string — a formatted narrative or bullet-point summary grouped by category. If no lessons exist, returns a template with guidance on how to populate the store.
+
+**Example prompt:** "Write a lessons learned section for project ALPHA-1's PIR, covering up to 8 lessons."
+
+---
+
+## pm-reporting — Governance Document Generation
+
+Six tools for generating governance documents and dashboards. Tools 1–5 use Claude to synthesise project data from the store into formatted markdown; `export_sro_dashboard_data` is deterministic and requires no AI. All tools read from the store — run data-loading and assurance tools first to maximise output quality.
+
+AI-powered tools (`generate_gate_review_summary`, `generate_board_exception_report`, `generate_portfolio_summary`, `generate_pir_template`) require `ANTHROPIC_API_KEY`.
+
+---
+
+### `generate_gate_review_summary`
+**Module:** pm-reporting
+
+Generate an IPA-format Gate Review Summary document. Gathers risks, gate readiness history, benefits, financial data, assurance scores, and change requests from the store, then uses Claude to synthesise a structured markdown document with DCA rating, conditions, recommendations, and per-dimension RAG assessment. Suitable for direct submission to an IPA or departmental gate review.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| gate_number | integer | Yes | — | IPA gate number (0–5). |
+| reviewer_name | string | No | `"Independent Reviewer"` | Name of the reviewing practitioner. |
+| include_recommendations | boolean | No | `true` | Whether to include a Recommended Actions section. |
+
+**Returns:** Markdown string with: executive summary, Strengths, Areas Requiring Management Attention, CONDITIONS (specific and actionable), optional Recommended Actions, and per-dimension RAG assessment table.
+
+**Example prompt:** "Generate a Gate 3 review summary for project ALPHA-1. The reviewer is Jane Smith."
+
+---
+
+### `generate_sro_dashboard`
+**Module:** pm-reporting
+
+Generate a one-page SRO Dashboard. Deterministic assembly of key delivery metrics — DCA rating, gate stage, EV metrics (SPI/CPI), financial performance, top risks, and benefits status — into a structured markdown table. No AI required; returns immediately. Ideal for weekly or monthly SRO reporting packs.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+
+**Returns:** Markdown string with a Delivery Status table, Top Risks table (if risks exist), Benefits Status table (if benefits exist), and Key Actions Required list.
+
+**Example prompt:** "Generate the SRO dashboard for project ALPHA-1."
+
+---
+
+### `generate_board_exception_report`
+**Module:** pm-reporting
+
+Generate a Board-format Exception Report containing only items requiring escalation. Uses Claude to translate technical delivery data into board language: non-technical, decision-focused Situation / Implication / Decision Required structure with a recommended board resolution. Suitable for ARAC, Investment Committee, or departmental board submission.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| reporting_period | string | No | — | Reporting period label (e.g. `Q1 2026/27`). |
+
+**Returns:** Markdown string with 2–5 exception items (each with Situation, Implication, and Decision Required) and a Recommended Board Resolution.
+
+**Example prompt:** "Generate a board exception report for project ALPHA-1 for Q1 2026/27."
+
+---
+
+### `generate_portfolio_summary`
+**Module:** pm-reporting
+
+Generate a cross-project Portfolio Summary narrative for a portfolio committee. For each project: DCA rating, SPI, CPI, top risk, and benefits RAG. Uses Claude to identify common themes, systemic risks, and recommended interventions across the portfolio.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_ids | array of strings | Yes | — | List of project identifiers to include. Minimum 1. |
+| portfolio_name | string | No | `"Portfolio"` | Name for the portfolio. |
+
+**Returns:** Markdown string with a Portfolio Scorecard table (one row per project), Portfolio Health Narrative, Common Themes and Systemic Risks, and Recommended Portfolio Interventions.
+
+**Example prompt:** "Generate a portfolio summary for projects ALPHA-1, BETA-2, and GAMMA-3. Call it 'Digital Transformation Portfolio'."
+
+---
+
+### `generate_pir_template`
+**Module:** pm-reporting
+
+Generate a Post-Implementation Review (PIR) template pre-populated with all available project data from the store. Includes delivery metrics vs business case (schedule, cost, benefits), benefits realised vs planned, closed risks that materialised, lessons learned (if pm-lessons data is available), and recommendations. Uses Claude to write narrative sections. Returns a complete markdown PIR template ready for review by the project team.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| closure_date | string | No | — | Project closure date (ISO date, e.g. `2026-03-31`). |
+
+**Returns:** Complete markdown PIR document with: Project Overview, Delivery Performance vs Business Case, Risks That Materialised, What Went Well, What Could Have Been Done Better, Lessons Learned, Recommendations for Future Projects, Outstanding Actions table, and Sign-off table. Fields without data are marked `[PLACEHOLDER]`.
+
+**Example prompt:** "Generate a PIR template for project ALPHA-1 with closure date 2026-03-31."
+
+---
+
+### `export_sro_dashboard_data`
+**Module:** pm-reporting
+
+Export SRO Dashboard data as a static JSON file for the Universal Dashboard Specification (UDS) Renderer. Gathers delivery metrics — DCA rating, gate stage, EV metrics, financial performance, top risks, and benefits — assembles panel-level data, and writes it to a JSON file. Returns the output file path and a localhost URL to open the dashboard in the UDS Renderer. Requires the UDS Renderer running on `http://localhost:5173`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| output_dir | string | Yes | — | Directory to write the panel data JSON file (e.g. path to `uds-renderer/public/data`). |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** JSON with `file_path` (absolute path to the written file), `panel_count`, `project_id`, and `url` (localhost UDS Renderer URL). The file is named `{project_id}-sro-data.json` and contains panels: `dca_rating`, `gate_status`, `open_changes`, `schedule_p50`, `schedule_p80`, `financial_eac`, `financial_bac`, `financial_variance_pct`, `top_risks_table`, and `benefits_table`.
+
+**Example prompt:** "Export the SRO dashboard data for project ALPHA-1 to the UDS renderer public/data directory."
+
+---
+
+*Reference updated: 14 April 2026 (v2.1 — 116 tools, 17 modules). For tool implementation details see the module source directories. For schema definitions see `docs/data-model-reference.md`.*
