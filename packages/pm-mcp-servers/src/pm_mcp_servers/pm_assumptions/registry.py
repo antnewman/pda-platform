@@ -8,6 +8,7 @@ from .server import (
     ASSUMPTIONS_TOOLS as TOOLS,
     _DISPATCH,
     _export_assumption_dashboard,
+    _export_assumption_graph,
     _fetch_external_signal,
     _detect_external_drift,
     _load_assumption_register,

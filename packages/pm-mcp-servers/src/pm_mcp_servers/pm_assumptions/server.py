@@ -1,8 +1,9 @@
 """pm-assumptions — Assumption Drift & Early-Warning Intelligence.
 
-Five tools for loading assumption registers, scoring confidence,
-fetching live external signals, detecting drift, and exporting
-dashboard data for the UDS renderer.
+Six tools for loading assumption registers, scoring confidence,
+fetching live external signals, detecting drift, exporting
+dashboard data for the UDS renderer, and exporting graph data
+for Neo4j, ArangoDB, Kùzu, or any graph database.
 
 Tools
 -----
@@ -11,6 +12,7 @@ score_assumption_confidence Compute 0-100 confidence scores per assumption.
 fetch_external_signal       Pull a live data point from a public source (ONS, World Bank).
 detect_external_drift       Compare a stored assumption against a fetched external signal.
 export_assumption_dashboard Write panel JSON for the UDS renderer and return the URL.
+export_assumption_graph     Export assumption dependency graph in JSON, Cypher, and CSV formats.
 """
 
 from __future__ import annotations
@@ -203,6 +205,50 @@ ASSUMPTIONS_TOOLS: list[Tool] = [
                 "output_dir": {
                     "type": "string",
                     "description": "Directory to write the panel data JSON file.",
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Optional path to the SQLite store.",
+                },
+            },
+            "required": ["project_id", "output_dir"],
+        },
+    ),
+    Tool(
+        name="export_assumption_graph",
+        description=(
+            "Export the assumption dependency graph for a project in multiple formats "
+            "ready to load into any graph database — Neo4j, ArangoDB, Kùzu, Memgraph, "
+            "or any tool that accepts JSON, Cypher, or CSV. "
+            "Builds a property graph where Assumption nodes are connected by LINKED_TO edges "
+            "to Deliverable and Milestone nodes (extracted from the linked_items field), "
+            "and by DEPENDS_ON edges between assumptions that share dependencies. "
+            "Node properties include: id, text, category, confidence_score, rag, "
+            "likelihood, owner, drift_severity. "
+            "Outputs three files: "
+            "(1) graph.json — universal node/edge JSON, works with any tool; "
+            "(2) graph.cypher — Cypher CREATE statements for Neo4j or Memgraph; "
+            "(3) nodes.csv + edges.csv — CSV import for Neo4j, Kùzu, ArangoDB. "
+            "Returns file paths, node count, edge count, and loading instructions "
+            "for each supported graph database. "
+            "Run score_assumption_confidence first to populate confidence scores."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Directory to write the graph export files.",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["all", "json", "cypher", "csv"],
+                    "description": "Output format. 'all' produces JSON, Cypher, and CSV. Default: 'all'.",
+                    "default": "all",
                 },
                 "db_path": {
                     "type": "string",
@@ -918,6 +964,245 @@ async def _export_assumption_dashboard(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
 
 
+async def _export_assumption_graph(arguments: dict) -> list[TextContent]:
+    project_id = arguments["project_id"]
+    output_dir = arguments["output_dir"]
+    fmt = arguments.get("format", "all")
+    db_path = arguments.get("db_path")
+    store = AssuranceStore(db_path) if db_path else AssuranceStore()
+
+    try:
+        import csv as csv_mod
+
+        assumptions = store.get_assumptions(project_id)
+        if not assumptions:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"No assumptions found for project '{project_id}'. Run load_assumption_register first.",
+            }))]
+
+        confidence_scores = store.get_assumption_confidence_scores(project_id)
+        cs_lookup = {}
+        for cs in confidence_scores:
+            aid = cs["assumption_id"]
+            if aid not in cs_lookup or cs["scored_at"] > cs_lookup[aid]["scored_at"]:
+                cs_lookup[aid] = cs
+
+        # ---------------------------------------------------------------
+        # Build nodes
+        # ---------------------------------------------------------------
+        nodes = []
+        deliverable_ids: set[str] = set()
+
+        for a in assumptions:
+            raw_id = a.get("id", "")
+            display_id = raw_id.replace(f"{project_id}-", "") if raw_id.startswith(project_id) else raw_id
+            cs = cs_lookup.get(raw_id, {})
+
+            # Extract likelihood from notes
+            likelihood = "MEDIUM"
+            notes = a.get("notes", "") or ""
+            for part in notes.split("|"):
+                part = part.strip()
+                if part.startswith("Likelihood:"):
+                    likelihood = part.split(":", 1)[1].strip()
+
+            nodes.append({
+                "id": display_id,
+                "type": "Assumption",
+                "label": display_id,
+                "properties": {
+                    "text": (a.get("text") or "")[:200],
+                    "category": a.get("category", ""),
+                    "confidence_score": cs.get("score"),
+                    "rag": cs.get("rag", "AMBER"),
+                    "likelihood": likelihood,
+                    "owner": a.get("owner", ""),
+                    "status": "Open",
+                    "project_id": project_id,
+                },
+            })
+
+            # Extract deliverable nodes from dependencies field
+            deps_raw = a.get("dependencies", "") or ""
+            for dep in deps_raw.split(","):
+                dep = dep.strip()
+                if dep:
+                    deliverable_ids.add(dep)
+
+        # Add deliverable / milestone nodes
+        for d in sorted(deliverable_ids):
+            d_id = d.replace(" ", "_")
+            node_type = "Milestone" if any(k in d.lower() for k in ("milestone", "gate", "phase")) else "Deliverable"
+            nodes.append({
+                "id": d_id,
+                "type": node_type,
+                "label": d,
+                "properties": {"name": d, "project_id": project_id},
+            })
+
+        # ---------------------------------------------------------------
+        # Build edges
+        # ---------------------------------------------------------------
+        edges = []
+        edge_id = 0
+
+        assumption_ids = {n["id"] for n in nodes if n["type"] == "Assumption"}
+
+        for a in assumptions:
+            raw_id = a.get("id", "")
+            src_id = raw_id.replace(f"{project_id}-", "") if raw_id.startswith(project_id) else raw_id
+
+            deps_raw = a.get("dependencies", "") or ""
+            for dep in deps_raw.split(","):
+                dep = dep.strip()
+                if not dep:
+                    continue
+                tgt_id = dep.replace(" ", "_")
+                # Is target another assumption or a deliverable?
+                rel = "DEPENDS_ON" if tgt_id in assumption_ids else "LINKED_TO"
+                edges.append({
+                    "id": f"e{edge_id}",
+                    "source": src_id,
+                    "target": tgt_id,
+                    "relationship": rel,
+                    "properties": {"project_id": project_id},
+                })
+                edge_id += 1
+
+        # ---------------------------------------------------------------
+        # Write outputs
+        # ---------------------------------------------------------------
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        files_written = []
+
+        # --- JSON ---
+        if fmt in ("all", "json"):
+            graph_data = {
+                "project_id": project_id,
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "nodes": nodes,
+                "edges": edges,
+            }
+            json_path = out_dir / f"{project_id}-graph.json"
+            json_path.write_text(json.dumps(graph_data, indent=2))
+            files_written.append(str(json_path))
+
+        # --- Cypher (Neo4j / Memgraph) ---
+        if fmt in ("all", "cypher"):
+            lines = [
+                "// PDA Platform — Assumption Dependency Graph",
+                f"// Project: {project_id}  Generated: {datetime.utcnow().date()}",
+                "// Load with: cypher-shell -f graph.cypher  or paste into Neo4j Browser",
+                "",
+                "// Clear existing data for this project (optional)",
+                f'MATCH (n {{project_id: "{project_id}"}}) DETACH DELETE n;',
+                "",
+                "// --- NODES ---",
+            ]
+            for n in nodes:
+                props = n["properties"]
+                prop_str = ", ".join(
+                    f'{k}: {json.dumps(v)}' for k, v in props.items() if v is not None
+                )
+                lines.append(f'CREATE (:{n["type"]} {{id: {json.dumps(n["id"])}, {prop_str}}});')
+
+            lines += ["", "// --- EDGES ---"]
+            for e in edges:
+                lines.append(
+                    f'MATCH (a {{id: {json.dumps(e["source"])}, project_id: {json.dumps(project_id)}}}), '
+                    f'(b {{id: {json.dumps(e["target"])}, project_id: {json.dumps(project_id)}}}) '
+                    f'CREATE (a)-[:{e["relationship"]}]->(b);'
+                )
+
+            lines += [
+                "",
+                "// --- USEFUL QUERIES ---",
+                "// View full graph:",
+                f'// MATCH (n {{project_id: "{project_id}"}}) RETURN n LIMIT 50',
+                "// Find RED assumptions and their cascade:",
+                f'// MATCH (a:Assumption {{rag: "RED", project_id: "{project_id}"}})-[r]->(b) RETURN a, r, b',
+                "// Shortest path between two assumptions:",
+                '// MATCH p=shortestPath((a:Assumption {id: "A009"})-[*]-(b)) RETURN p',
+            ]
+
+            cypher_path = out_dir / f"{project_id}-graph.cypher"
+            cypher_path.write_text("\n".join(lines))
+            files_written.append(str(cypher_path))
+
+        # --- CSV (nodes.csv + edges.csv) ---
+        if fmt in ("all", "csv"):
+            nodes_path = out_dir / f"{project_id}-nodes.csv"
+            edges_path = out_dir / f"{project_id}-edges.csv"
+
+            with open(nodes_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv_mod.writer(f)
+                writer.writerow(["nodeId", "type", "label", "text", "category",
+                                  "confidence_score", "rag", "likelihood", "owner", "project_id"])
+                for n in nodes:
+                    p = n["properties"]
+                    writer.writerow([
+                        n["id"], n["type"], n["label"],
+                        p.get("text", p.get("name", "")),
+                        p.get("category", ""),
+                        p.get("confidence_score", ""),
+                        p.get("rag", ""),
+                        p.get("likelihood", ""),
+                        p.get("owner", ""),
+                        project_id,
+                    ])
+
+            with open(edges_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv_mod.writer(f)
+                writer.writerow(["edgeId", "source", "target", "relationship", "project_id"])
+                for e in edges:
+                    writer.writerow([e["id"], e["source"], e["target"], e["relationship"], project_id])
+
+            files_written += [str(nodes_path), str(edges_path)]
+
+        # ---------------------------------------------------------------
+        # Loading instructions
+        # ---------------------------------------------------------------
+        instructions = {
+            "neo4j": (
+                "1. Open Neo4j Browser or use cypher-shell. "
+                f"2. Run: :source {project_id}-graph.cypher  "
+                "OR use CSV import: LOAD CSV WITH HEADERS FROM 'file:///{project_id}-nodes.csv' AS row CREATE (:Assumption {id: row.nodeId, ...})"
+            ),
+            "memgraph": (
+                f"Run graph.cypher via mgconsole: mgconsole < {project_id}-graph.cypher"
+            ),
+            "arangodb": (
+                f"Use arangoimport: arangoimport --file {project_id}-nodes.csv --type csv --collection assumptions "
+                f"and: arangoimport --file {project_id}-edges.csv --type csv --collection assumption_deps --from-collection-prefix assumptions --to-collection-prefix assumptions"
+            ),
+            "kuzu": (
+                "Use Kùzu Python API: conn.execute(\"COPY Assumption FROM '{project_id}-nodes.csv' (header=true)\") "
+                "and COPY AssumedDependency FROM '{project_id}-edges.csv'"
+            ),
+            "any_json_tool": (
+                f"Load {project_id}-graph.json — nodes array and edges array are self-contained. "
+                "Compatible with NetworkX (Python), D3.js, Gephi, yFiles, and most graph visualisation libraries."
+            ),
+        }
+
+        return [TextContent(type="text", text=json.dumps({
+            "project_id": project_id,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "assumption_nodes": sum(1 for n in nodes if n["type"] == "Assumption"),
+            "deliverable_nodes": sum(1 for n in nodes if n["type"] in ("Deliverable", "Milestone")),
+            "files_written": files_written,
+            "loading_instructions": instructions,
+        }))]
+
+    except Exception as exc:
+        import traceback
+        return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -928,6 +1213,7 @@ _DISPATCH = {
     "fetch_external_signal": _fetch_external_signal,
     "detect_external_drift": _detect_external_drift,
     "export_assumption_dashboard": _export_assumption_dashboard,
+    "export_assumption_graph": _export_assumption_graph,
 }
 
 

@@ -1,10 +1,10 @@
 # PDA Platform — Project Data Analytics
 
-> **PDA = Project Data Analytics.** Not a personal digital assistant, not the PDATaskForce org on GitHub. This is a purpose-built MCP platform for UK government IPA Gate Review assurance. 121 tools across 18 modules. Connect Claude or any MCP-compatible AI in under 60 seconds.
+> **PDA = Project Data Analytics.** Not a personal digital assistant, not the PDATaskForce org on GitHub. This is a purpose-built MCP platform for UK government IPA Gate Review assurance. 122 tools across 18 modules. Connect Claude or any MCP-compatible AI in under 60 seconds.
 
 ## What it is
 
-PDA Platform (Project Data Analytics) is a semantic layer for project delivery data. It ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through 121 structured MCP tools that AI can reason about directly.
+PDA Platform (Project Data Analytics) is a semantic layer for project delivery data. It ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through 122 structured MCP tools that AI can reason about directly.
 
 The platform is aligned to UK government delivery standards: IPA Gate Reviews (Gates 0-5), HM Treasury Green Book, GMPP reporting, and Cabinet Office project controls.
 

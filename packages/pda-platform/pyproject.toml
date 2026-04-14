@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "pda-platform"
 version = "1.2.0"
-description = "121 MCP tools for UK government IPA Gate Review assurance. Connects Claude to schedule analysis, risk registers, Monte Carlo simulation, narrative divergence detection, lessons learned, and gate readiness."
+description = "122 MCP tools for UK government IPA Gate Review assurance. Connects Claude to schedule analysis, risk registers, Monte Carlo simulation, narrative divergence detection, lessons learned, and gate readiness."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"

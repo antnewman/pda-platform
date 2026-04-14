@@ -19,9 +19,9 @@ Aggregates all eighteen PDA MCP servers into a single endpoint:
   pm-simulation  ( 2 tools)   Monte Carlo schedule and cost simulation with PERT/triangular distributions
   pm-lessons     ( 5 tools)   AI extraction of lessons learned from gate reviews/PIRs, cross-project pattern analysis
   pm-reporting   ( 6 tools)   IPA-format governance documents, SRO dashboard, board exception reports, PIR templates
-  pm-assumptions ( 5 tools)   Assumption drift detection, confidence scoring, live external signal integration
+  pm-assumptions ( 6 tools)   Assumption drift detection, confidence scoring, live external signal integration, graph export
 
-Total: 121 tools accessible through one connection.
+Total: 122 tools accessible through one connection.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ ALL_TOOLS: list[Tool] = (
 logger.info(
     "PDA Platform unified server: %d tools from %d modules",
     len(ALL_TOOLS),
-    18,
+    18,  # modules
 )
 
 
