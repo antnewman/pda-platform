@@ -19,9 +19,9 @@ Aggregates all eighteen PDA MCP servers into a single endpoint:
   pm-simulation  ( 2 tools)   Monte Carlo schedule and cost simulation with PERT/triangular distributions
   pm-lessons     ( 5 tools)   AI extraction of lessons learned from gate reviews/PIRs, cross-project pattern analysis
   pm-reporting   ( 6 tools)   IPA-format governance documents, SRO dashboard, board exception reports, PIR templates
-  pm-assumptions ( 6 tools)   Assumption drift detection, confidence scoring, live external signal integration, graph export
+  pm-assumptions ( 7 tools)   Assumption drift detection, confidence scoring, live external signal integration, executive reporting, graph export
 
-Total: 122 tools accessible through one connection.
+Total: 123 tools accessible through one connection.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 # PDA Platform — MCP Tools Reference
 
-**Version:** 2.2 | **Total tools:** 121 | **Modules:** 18
+**Version:** 2.3 | **Total tools:** 123 | **Modules:** 18
 
 This reference documents all 121 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
 
@@ -77,8 +77,8 @@ Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) c
 | pm-simulation | 2 | Monte Carlo schedule simulation — P50/P80/P90 delivery dates |
 | pm-lessons | 5 | AI lessons extraction from gate reviews/PIRs, systemic pattern analysis |
 | pm-reporting | 6 | Gate review summaries, SRO dashboards, board exception reports, PIR templates |
-| pm-assumptions | 5 | Assumption drift detection, confidence scoring, live external signals (ONS/World Bank), cascade analysis, UDS dashboard |
-| **Total** | **121** | One unified endpoint |
+| pm-assumptions | 7 | Assumption drift detection, confidence scoring, live external signals (ONS/World Bank), AI executive reports, cascade analysis, UDS dashboard, graph export |
+| **Total** | **123** | One unified endpoint |
 
 ---
 
@@ -2288,7 +2288,7 @@ Export SRO Dashboard data as a static JSON file for the Universal Dashboard Spec
 
 ## pm-assumptions — Assumption Drift and Early Warning
 
-Five tools for loading assumption registers, scoring confidence, fetching live external signals, detecting drift against real-world data, and exporting a UDS dashboard. Designed to shift assumption management from passive documentation to active assurance.
+Seven tools for loading assumption registers, scoring confidence, fetching live external signals, detecting drift against real-world data, generating AI executive reports with recommended actions, exporting a UDS dashboard, and exporting assumption dependency graphs. Designed to shift assumption management from passive documentation to active assurance.
 
 The `assumption_confidence_scores` and `external_signals` tables are separate from the `assumptions` and `assumption_validations` tables used by pm-assure. pm-assumptions builds on top of pm-assure's foundation — use `ingest_assumption` (pm-assure) for individual assumptions and `load_assumption_register` (pm-assumptions) to bulk-ingest from Excel/CSV files.
 
@@ -2381,4 +2381,42 @@ Export assumption drift data as a static JSON file for the UDS Renderer. Assembl
 
 ---
 
-*Reference updated: 14 April 2026 (v2.2 — 121 tools, 18 modules). For tool implementation details see the module source directories. For schema definitions see `docs/data-model-reference.md`.*
+### `generate_assumption_report`
+**Module:** pm-assumptions
+
+Generate an AI-authored executive assumption drift report for a project. Reads confidence scores, external drift signals, and cascade dependencies from the assurance store and synthesises: (1) an executive summary of the overall assumption health position; (2) a prioritised list of at-risk assumptions with specific recommended actions; (3) cascade risk narrative; (4) governance actions and recommended next review date. Output is suitable for an SRO briefing note, a PMO exception report, or gate review pre-read. Run `score_assumption_confidence` and `fetch_external_signal` first.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| project_name | string | No | `project_id` | Human-readable project name for the report header. |
+| gate_stage | integer | No | — | Current IPA gate stage (0–5). Tailors recommendations to gate-specific risks. |
+| top_n | integer | No | `5` | Number of highest-risk assumptions to include in recommended actions. |
+| include_cascade | boolean | No | `true` | Whether to include cascade risk narrative. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** Structured JSON report containing `report_title`, `report_date`, `gate_context`, `executive_summary` (health rating, score, RAG counts, narrative, signals integrated), `top_at_risk_assumptions` (assumption_id, text, score, rag, likelihood, action, priority), `cascade_risk`, `governance_actions`, `recommended_next_review_days`, and `methodology_note`.
+
+**Example prompt:** "Generate an assumption drift report for the Holographic Project Office ahead of the Gate 3 review."
+
+---
+
+### `export_assumption_graph`
+**Module:** pm-assumptions
+
+Export the assumption dependency graph for a project in multiple formats ready to load into any graph database. Builds a property graph where Assumption nodes connect via LINKED_TO edges to Deliverable and Milestone nodes and via DEPENDS_ON edges between co-dependent assumptions. Produces up to four files: `graph.json` (universal node/edge JSON), `graph.cypher` (Cypher CREATE statements for Neo4j or Memgraph), `nodes.csv` and `edges.csv` (CSV import for Neo4j, Kùzu, ArangoDB). Run `score_assumption_confidence` first to populate confidence scores in node properties.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier. |
+| output_dir | string | Yes | — | Directory to write the graph export files. |
+| format | string | No | `"all"` | Output format. One of: `all`, `json`, `cypher`, `csv`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Optional path to the SQLite store. |
+
+**Returns:** `project_id`, `node_count`, `edge_count`, `assumption_nodes`, `deliverable_nodes`, `files_written` (list of absolute paths), and `loading_instructions` (tool-specific import commands for Neo4j, Memgraph, ArangoDB, Kùzu, and any JSON tool).
+
+**Example prompt:** "Export the assumption graph for HPO-001 to the outputs directory in all formats."
+
+---
+
+*Reference updated: 15 April 2026 (v2.3 — 123 tools, 18 modules). For tool implementation details see the module source directories. For schema definitions see `docs/data-model-reference.md`.*

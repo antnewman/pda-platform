@@ -8,7 +8,7 @@
 [![PyPI - pm-data-tools](https://img.shields.io/pypi/v/pm-data-tools)](https://pypi.org/project/pm-data-tools/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18133574.svg)](https://doi.org/10.5281/zenodo.18133574)
 
-**122 tools · 18 modules · Production-deployed · Published on PyPI**
+**123 tools · 18 modules · Production-deployed · Published on PyPI**
 
 ---
 
@@ -79,7 +79,7 @@ This queries risk registers, benefits status, gate conditions, cost performance,
 
 ---
 
-## What Claude can do with 122 tools
+## What Claude can do with 123 tools
 
 Once connected, Claude can answer questions like:
 
@@ -141,7 +141,7 @@ Once connected, Claude can answer questions like:
 | pm-simulation | 2 | Monte Carlo schedule simulation with PERT distributions, P50/P80/P90 delivery dates |
 | pm-lessons | 5 | AI extraction of lessons from gate reviews/PIRs, cross-project keyword search, systemic pattern analysis |
 | pm-reporting | 6 | IPA-format gate review summaries, SRO dashboards, board exception reports, portfolio summaries, PIR templates, UDS export |
-| pm-assumptions | 6 | Assumption drift detection, confidence scoring, live external signal integration (ONS, World Bank), cascade analysis, UDS dashboard |
+| pm-assumptions | 7 | Assumption drift detection, confidence scoring, live external signal integration (ONS, World Bank), AI executive reports, cascade analysis, UDS dashboard |
 | **Total** | **122** | One unified endpoint · One connection |
 
 ---
@@ -163,7 +163,7 @@ PDA Platform
 ├── packages/
 │   ├── pm-data-tools/          Core library: parsers, validators, AssuranceStore (SQLite)
 │   ├── pda-platform/           Meta-package: pip install pda-platform installs everything
-│   ├── pm-mcp-servers/         18 MCP modules, 122 tools for AI integration
+│   ├── pm-mcp-servers/         18 MCP modules, 123 tools for AI integration
 │   └── agent-task-planning/    AI reliability: confidence extraction, outlier mining
 ├── docs/                       Practitioner guides, prompt library, technical references
 ├── specs/                      Canonical data model, benchmarks, synthetic data specs
@@ -210,7 +210,7 @@ PDA Platform
 | Document | Description |
 |----------|-------------|
 | [Architecture Overview](docs/architecture-overview.md) | System architecture and component interactions |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Parameter-level reference for all 122 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Parameter-level reference for all 123 tools |
 | [Connection Guide](docs/connection-guide.md) | Connect Claude.ai, Claude Desktop, ChatGPT, Gemini |
 | [Getting Started](docs/getting-started.md) | Installation, configuration, and first steps |
 | [Data Model Reference](docs/data-model-reference.md) | Canonical data model and entity relationships |
@@ -242,7 +242,7 @@ pip install -e packages/pm-mcp-servers
 
 **Run tests:**
 ```bash
-cd packages/pm-mcp-servers && python -m pytest   # 76 tests, 122 tools
+cd packages/pm-mcp-servers && python -m pytest   # 76 tests, 123 tools
 cd packages/pm-data-tools && python -m pytest
 ```
 

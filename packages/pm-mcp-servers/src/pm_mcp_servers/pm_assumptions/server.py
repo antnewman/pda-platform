@@ -1,9 +1,10 @@
 """pm-assumptions — Assumption Drift & Early-Warning Intelligence.
 
-Six tools for loading assumption registers, scoring confidence,
-fetching live external signals, detecting drift, exporting
-dashboard data for the UDS renderer, and exporting graph data
-for Neo4j, ArangoDB, Kùzu, or any graph database.
+Seven tools for loading assumption registers, scoring confidence,
+fetching live external signals, detecting drift, generating executive
+reports with recommended actions, exporting dashboard data for the UDS
+renderer, and exporting graph data for Neo4j, ArangoDB, Kùzu, or any
+graph database.
 
 Tools
 -----
@@ -11,6 +12,7 @@ load_assumption_register    Bulk-ingest an Excel/CSV assumption register.
 score_assumption_confidence Compute 0-100 confidence scores per assumption.
 fetch_external_signal       Pull a live data point from a public source (ONS, World Bank).
 detect_external_drift       Compare a stored assumption against a fetched external signal.
+generate_assumption_report  AI-generated executive report: drift summary, recommended actions, risk narrative.
 export_assumption_dashboard Write panel JSON for the UDS renderer and return the URL.
 export_assumption_graph     Export assumption dependency graph in JSON, Cypher, and CSV formats.
 """
@@ -256,6 +258,58 @@ ASSUMPTIONS_TOOLS: list[Tool] = [
                 },
             },
             "required": ["project_id", "output_dir"],
+        },
+    ),
+    Tool(
+        name="generate_assumption_report",
+        description=(
+            "Generate an AI-authored executive assumption drift report for a project. "
+            "Reads confidence scores, external drift signals, and cascade dependencies "
+            "from the assurance store and synthesises: "
+            "(1) an executive summary of the overall assumption health position; "
+            "(2) a prioritised list of at-risk assumptions with specific recommended actions; "
+            "(3) a cascade risk narrative identifying which assumptions could trigger "
+            "downstream failures if they break; "
+            "(4) recommended next review date and governance actions. "
+            "This tool produces the recommendations automatically — no human prompting required. "
+            "Output is structured JSON containing a plain-English report suitable for an SRO "
+            "briefing note, a PMO exception report, or gate review pre-read. "
+            "Run score_assumption_confidence and fetch_external_signal before calling this tool. "
+            "Use gate_stage to tailor the report language to the current IPA gate (0-5)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Human-readable project name for the report header.",
+                },
+                "gate_stage": {
+                    "type": "integer",
+                    "description": "Current IPA gate stage (0-5). Tailors recommendations to gate-specific risks.",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+                "top_n": {
+                    "type": "integer",
+                    "description": "Number of highest-risk assumptions to highlight in the report. Default: 5.",
+                    "default": 5,
+                },
+                "include_cascade": {
+                    "type": "boolean",
+                    "description": "Whether to include cascade risk narrative. Default: true.",
+                    "default": True,
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Optional path to the SQLite store.",
+                },
+            },
+            "required": ["project_id"],
         },
     ),
 ]
@@ -799,24 +853,51 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
         baseline = assumption.get("baseline_value")
         current = assumption.get("current_value") or baseline
         signal_value = signal["value"]
+        unit = assumption.get("unit", "")
+        signal_unit = signal.get("unit", "")
 
-        # Compute drift vs baseline
-        if baseline and baseline != 0:
-            drift_pct = abs((signal_value - baseline) / baseline) * 100
+        # Detect boolean baseline — assumption was stored as yes/no (1.0),
+        # not a numeric measure. In this case we cannot compute a meaningful
+        # percentage drift vs the baseline. Instead we assess the signal value
+        # directly against a quality threshold and report qualitatively.
+        is_boolean = unit in ("boolean", "bool", "") or (baseline is not None and baseline <= 1.0 and unit in ("boolean", ""))
+
+        if is_boolean:
+            # For boolean assumptions, interpret the signal directly.
+            # Use 80% as the "adequate" threshold for percentage-type signals.
+            # This is clearly labelled in the summary.
+            if signal_value >= 80:
+                severity = "LOW"
+                drift_direction = "ADEQUATE"
+                drift_pct = None
+                qualitative = f"Signal value {signal_value} {signal_unit} meets the adequacy threshold (≥80%). Low concern."
+            elif signal_value >= 60:
+                severity = "MEDIUM"
+                drift_direction = "MARGINAL"
+                drift_pct = None
+                qualitative = f"Signal value {signal_value} {signal_unit} is marginal (60–80% range). The assumption may not hold."
+            else:
+                severity = "HIGH"
+                drift_direction = "INADEQUATE"
+                drift_pct = None
+                qualitative = f"Signal value {signal_value} {signal_unit} is below the adequacy threshold (<60%). The assumption is likely to be false."
         else:
-            drift_pct = 0.0
+            # Numeric baseline — compute percentage drift
+            if baseline and baseline != 0:
+                drift_pct = round(abs((signal_value - baseline) / baseline) * 100, 1)
+            else:
+                drift_pct = 0.0
+            drift_direction = "ABOVE" if signal_value > (current or 0) else "BELOW"
+            qualitative = None
 
-        drift_direction = "ABOVE" if signal_value > (current or 0) else "BELOW"
-
-        # Determine severity
-        if drift_pct > _SEVERITY_THRESHOLDS["HIGH"]:
-            severity = "HIGH"
-        elif drift_pct > _SEVERITY_THRESHOLDS["MEDIUM"]:
-            severity = "MEDIUM"
-        elif drift_pct > _SEVERITY_THRESHOLDS["LOW"]:
-            severity = "LOW"
-        else:
-            severity = "NONE"
+            if drift_pct > _SEVERITY_THRESHOLDS["HIGH"]:
+                severity = "HIGH"
+            elif drift_pct > _SEVERITY_THRESHOLDS["MEDIUM"]:
+                severity = "MEDIUM"
+            elif drift_pct > _SEVERITY_THRESHOLDS["LOW"]:
+                severity = "LOW"
+            else:
+                severity = "NONE"
 
         # Get cascade dependencies
         deps_raw = assumption.get("dependencies", "") or ""
@@ -824,14 +905,22 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
 
         # Build plain-English summary
         a_text = assumption.get("text", "")[:120]
-        summary = (
-            f"Assumption '{assumption_id}': {a_text}. "
-            f"Baseline value: {baseline} {assumption.get('unit', '')}. "
-            f"External signal ({indicator} from {source}): {signal_value} {signal.get('unit', '')} "
-            f"as of {signal.get('signal_date', 'unknown date')}. "
-            f"Drift: {round(drift_pct, 1)}% ({drift_direction} baseline). "
-            f"Severity: {severity}."
-        )
+        if is_boolean:
+            summary = (
+                f"Assumption '{assumption_id}': {a_text}. "
+                f"This is a boolean assumption (held as true at project outset). "
+                f"External signal ({indicator} from {source}): {signal_value} {signal_unit} "
+                f"as of {signal.get('signal_date', 'unknown date')}. "
+                f"{qualitative} Severity: {severity}."
+            )
+        else:
+            summary = (
+                f"Assumption '{assumption_id}': {a_text}. "
+                f"Baseline value: {baseline} {unit}. "
+                f"External signal ({indicator} from {source}): {signal_value} {signal_unit} "
+                f"as of {signal.get('signal_date', 'unknown date')}. "
+                f"Drift: {drift_pct}% ({drift_direction} baseline). Severity: {severity}."
+            )
         if cascade:
             summary += f" Linked items at risk: {', '.join(cascade)}."
 
@@ -848,7 +937,8 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
                 "unit": signal.get("unit", ""),
                 "signal_date": signal.get("signal_date", ""),
             },
-            "drift_pct": round(drift_pct, 1),
+            "drift_pct": round(drift_pct, 1) if drift_pct is not None else None,
+            "qualitative": qualitative if is_boolean else None,
             "drift_direction": drift_direction,
             "severity": severity,
             "cascade_linked_items": cascade,
@@ -1203,6 +1293,266 @@ async def _export_assumption_graph(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
 
 
+async def _generate_assumption_report(arguments: dict) -> list[TextContent]:
+    project_id = arguments["project_id"]
+    project_name = arguments.get("project_name", project_id)
+    gate_stage = arguments.get("gate_stage")
+    top_n = int(arguments.get("top_n", 5))
+    include_cascade = arguments.get("include_cascade", True)
+    db_path = arguments.get("db_path")
+    store = AssuranceStore(db_path) if db_path else AssuranceStore()
+
+    try:
+        # Load assumptions and confidence scores
+        assumptions = store.get_assumptions(project_id)
+        if not assumptions:
+            return [TextContent(type="text", text=json.dumps({
+                "error": "No assumptions found. Run load_assumption_register first.",
+            }))]
+
+        confidence_scores = store.get_assumption_confidence_scores(project_id)
+        score_lookup = {cs["assumption_id"]: cs for cs in confidence_scores}
+
+        # If no scores yet, compute them now
+        if not confidence_scores:
+            for a in assumptions:
+                notes = a.get("notes", "") or ""
+                if "Likelihood:" in notes:
+                    for part in notes.split("|"):
+                        part = part.strip()
+                        if part.startswith("Likelihood:"):
+                            a["likelihood_of_failure"] = part.split(":", 1)[1].strip()
+                cs = _compute_confidence(a)
+                score_lookup[a["id"]] = {**cs, "assumption_id": a["id"]}
+
+        # Build enriched assumption list
+        enriched = []
+        for a in assumptions:
+            aid = a["id"]
+            display_id = aid.replace(f"{project_id}-", "") if aid.startswith(project_id) else aid
+            cs = score_lookup.get(aid, {})
+            score = cs.get("score", 50.0)
+            rag = cs.get("rag", "AMBER")
+            enriched.append({
+                "id": aid,
+                "display_id": display_id,
+                "text": a.get("text", ""),
+                "category": a.get("category", ""),
+                "score": score,
+                "rag": rag,
+                "likelihood": a.get("likelihood_of_failure", ""),
+                "owner": a.get("owner", ""),
+                "review_date": a.get("review_date", ""),
+                "dependencies": a.get("dependencies", "") or "",
+                "impact_if_false": a.get("impact_if_false", "") or "",
+                "review_age_days": cs.get("review_age_days"),
+                "explanation": cs.get("explanation", ""),
+            })
+
+        enriched.sort(key=lambda x: x["score"])  # lowest confidence first
+        red = [e for e in enriched if e["rag"] == "RED"]
+        amber = [e for e in enriched if e["rag"] == "AMBER"]
+        green = [e for e in enriched if e["rag"] == "GREEN"]
+
+        top_at_risk = enriched[:top_n]
+
+        # Load external signals for context
+        signals = store.get_all_external_signals()
+        signal_summary = [
+            f"{s['indicator']} ({s['source']}): {s['value']} {s.get('unit','')} as of {s.get('signal_date','unknown')}"
+            for s in signals
+        ] if signals else []
+
+        # Identify cascade chains: assumptions with dependencies
+        cascade_chains = []
+        if include_cascade:
+            for e in enriched:
+                if e["rag"] == "RED" and e["dependencies"]:
+                    deps = [d.strip() for d in e["dependencies"].split(",") if d.strip()]
+                    if deps:
+                        cascade_chains.append({
+                            "assumption_id": e["display_id"],
+                            "text": e["text"][:100],
+                            "linked_items": deps,
+                            "severity": "HIGH" if e["score"] < 30 else "MEDIUM",
+                        })
+
+        # Gate-specific language
+        gate_context = ""
+        if gate_stage is not None:
+            gate_labels = {
+                0: "Strategic Assessment",
+                1: "Justification",
+                2: "Strategy",
+                3: "Investment Decision",
+                4: "Readiness for Service",
+                5: "Operational Review",
+            }
+            gate_label = gate_labels.get(gate_stage, f"Gate {gate_stage}")
+            gate_context = (
+                f"This report is prepared for IPA Gate {gate_stage}: {gate_label}. "
+                f"Reviewers at this gate will focus on whether the assumptions underpinning "
+                f"the {'business case' if gate_stage <= 2 else 'delivery plan'} remain valid."
+            )
+
+        # ── Executive summary ────────────────────────────────────────────────
+        total = len(enriched)
+        avg_score = round(sum(e["score"] for e in enriched) / total, 1) if total else 0
+
+        if avg_score < 35:
+            overall_health = "CRITICAL"
+            health_narrative = (
+                f"The assumption base for {project_name} is in a critical condition. "
+                f"With {len(red)} of {total} assumptions rated RED and an average confidence "
+                f"score of {avg_score}/100, the project is carrying substantial unvalidated "
+                f"risk. Immediate SRO attention and accelerated validation are required."
+            )
+        elif avg_score < 55:
+            overall_health = "POOR"
+            health_narrative = (
+                f"{project_name} has a weak assumption base. "
+                f"{len(red)} assumptions are RED and {len(amber)} are AMBER — "
+                f"meaning {len(red)+len(amber)} of {total} ({round((len(red)+len(amber))/total*100)}%) "
+                f"carry unacceptable or borderline risk. A targeted validation campaign is needed."
+            )
+        elif avg_score < 70:
+            overall_health = "MODERATE"
+            health_narrative = (
+                f"{project_name} has a moderate assumption position. "
+                f"{len(amber)} assumptions require active management and {len(red)} need urgent attention. "
+                f"Confidence is trending below the level expected at this stage."
+            )
+        else:
+            overall_health = "ADEQUATE"
+            health_narrative = (
+                f"{project_name}'s assumptions are broadly sound. "
+                f"The majority ({len(green)}) are GREEN with adequate confidence. "
+                f"Maintain regular reviews to prevent drift."
+            )
+
+        # ── Recommended actions per top-at-risk assumption ──────────────────
+        recommended_actions = []
+        for e in top_at_risk:
+            aid = e["display_id"]
+            text = e["text"][:100]
+            score = e["score"]
+            likelihood = e.get("likelihood", "UNKNOWN").upper()
+            category = e.get("category", "").upper()
+            impact = e.get("impact_if_false", "")[:120]
+            review_age = e.get("review_age_days")
+
+            # Generate specific action based on category and likelihood
+            if likelihood == "HIGH":
+                action_prefix = "ESCALATE immediately to SRO."
+                action = f"{action_prefix} Treat assumption {aid} as an active risk — log in the risk register with a mitigation plan. "
+            elif likelihood == "MEDIUM":
+                action_prefix = "VALIDATE within 2 weeks."
+                action = f"{action_prefix} Commission targeted evidence to confirm or refute assumption {aid}. "
+            else:
+                action_prefix = "REVIEW and update."
+                action = f"{action_prefix} Assumption {aid} has not been reviewed recently. Schedule with the owner ({e.get('owner','TBC')}). "
+
+            if review_age and review_age > 90:
+                action += f"Note: last reviewed {int(review_age)} days ago — overdue by {int(review_age - 90)} days. "
+
+            if impact:
+                action += f"If this assumption fails: {impact}"
+
+            recommended_actions.append({
+                "assumption_id": aid,
+                "text": text,
+                "score": score,
+                "rag": e["rag"],
+                "likelihood": likelihood,
+                "category": category,
+                "owner": e.get("owner", "TBC"),
+                "action": action,
+                "priority": "CRITICAL" if score < 25 else "HIGH" if score < 40 else "MEDIUM",
+            })
+
+        # ── Cascade narrative ────────────────────────────────────────────────
+        cascade_narrative = ""
+        if include_cascade and cascade_chains:
+            chain_texts = []
+            for c in cascade_chains[:3]:
+                chain_texts.append(
+                    f"If assumption {c['assumption_id']} ({c['text'][:60]}...) fails, "
+                    f"the following linked items are at risk: {', '.join(c['linked_items'][:4])}."
+                )
+            cascade_narrative = (
+                f"Cascade risk analysis identified {len(cascade_chains)} RED assumptions with "
+                f"downstream dependencies. Key cascade chains: " + " ".join(chain_texts)
+            )
+        elif include_cascade:
+            cascade_narrative = (
+                "No high-severity cascade chains identified. "
+                "Dependency links are sparse — consider enriching the register with linked items."
+            )
+
+        # ── External signals summary ─────────────────────────────────────────
+        signals_narrative = ""
+        if signal_summary:
+            signals_narrative = (
+                f"The following external signals are integrated into this assessment: "
+                + "; ".join(signal_summary[:4]) + ". "
+                "These live data points are compared against assumption baselines to detect "
+                "early-warning drift before it impacts delivery."
+            )
+
+        # ── Governance recommendations ───────────────────────────────────────
+        next_review_days = 14 if overall_health in ("CRITICAL", "POOR") else 30 if overall_health == "MODERATE" else 60
+        governance_actions = [
+            f"Schedule assumption review board within {next_review_days} days.",
+            f"Assign owners to all {len([e for e in enriched if not e['owner']])} unowned assumptions." if any(not e["owner"] for e in enriched) else "All assumptions have named owners — confirm active accountability.",
+            "Update the risk register to reflect any RED assumptions with HIGH likelihood of failure.",
+            "Commission external validation for assumptions where confidence score is below 30.",
+        ]
+        if gate_stage is not None and gate_stage >= 3:
+            governance_actions.insert(0,
+                f"Gate {gate_stage} reviewers will expect evidence of assumption validation — prepare a validation pack.")
+
+        # ── Assemble report ──────────────────────────────────────────────────
+        report_date = datetime.now().strftime("%d %B %Y")
+        report = {
+            "report_title": f"Assumption Drift & Early Warning Report — {project_name}",
+            "report_date": report_date,
+            "project_id": project_id,
+            "gate_context": gate_context,
+            "executive_summary": {
+                "overall_health": overall_health,
+                "average_confidence_score": avg_score,
+                "total_assumptions": total,
+                "red_count": len(red),
+                "amber_count": len(amber),
+                "green_count": len(green),
+                "narrative": health_narrative,
+                "signals_integrated": len(signals),
+                "signals_narrative": signals_narrative,
+            },
+            "top_at_risk_assumptions": recommended_actions,
+            "cascade_risk": {
+                "cascade_chains_identified": len(cascade_chains),
+                "cascade_narrative": cascade_narrative,
+                "chains": cascade_chains[:5],
+            } if include_cascade else None,
+            "governance_actions": governance_actions,
+            "recommended_next_review_days": next_review_days,
+            "methodology_note": (
+                "Confidence scores are computed from three weighted factors: "
+                "review recency (35%), source credibility (30%), and data backing quality (35%). "
+                "The composite score is multiplied by a likelihood penalty "
+                "(HIGH=0.3×, MEDIUM=0.6×, LOW=0.9×). "
+                "RAG thresholds: GREEN ≥70, AMBER 40–69, RED <40."
+            ),
+        }
+
+        return [TextContent(type="text", text=json.dumps(report, indent=2, default=str))]
+
+    except Exception as exc:
+        import traceback
+        return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -1212,6 +1562,7 @@ _DISPATCH = {
     "score_assumption_confidence": _score_assumption_confidence,
     "fetch_external_signal": _fetch_external_signal,
     "detect_external_drift": _detect_external_drift,
+    "generate_assumption_report": _generate_assumption_report,
     "export_assumption_dashboard": _export_assumption_dashboard,
     "export_assumption_graph": _export_assumption_graph,
 }

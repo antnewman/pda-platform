@@ -175,10 +175,10 @@ class TestToolAggregation:
     """Test that tool aggregation in the unified server is correct."""
 
     def test_total_tool_count(self):
-        """Unified server has exactly 122 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+6)."""
+        """Unified server has exactly 123 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+7)."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
-        assert len(ALL_TOOLS) == 122
+        assert len(ALL_TOOLS) == 123
 
     def test_no_duplicate_tool_names(self):
         """No two tools share the same name across modules."""
@@ -202,7 +202,9 @@ class TestToolAggregation:
         # First tool should be from pm-data
         assert names[0] == "load_project"
         # Last tool should be from pm-assumptions
-        assert names[-1] == "export_assumption_graph"
+        assert names[-1] == "generate_assumption_report"
+        # export_assumption_graph should be second-to-last
+        assert names[-2] == "export_assumption_graph"
 
     def test_all_tools_have_valid_schemas(self):
         """Every tool has a name, description, and inputSchema."""
@@ -443,6 +445,7 @@ class TestExpectedTools:
                 "score_assumption_confidence",
                 "fetch_external_signal",
                 "detect_external_drift",
+                "generate_assumption_report",
                 "export_assumption_dashboard",
                 "export_assumption_graph",
             }
@@ -642,6 +645,7 @@ class TestAssumptionsModule:
         "score_assumption_confidence",
         "fetch_external_signal",
         "detect_external_drift",
+        "generate_assumption_report",
         "export_assumption_dashboard",
         "export_assumption_graph",
     }
@@ -649,7 +653,7 @@ class TestAssumptionsModule:
     def test_assumptions_registry_loads(self):
         from pm_mcp_servers.pm_assumptions.registry import TOOLS
 
-        assert len(TOOLS) == 6
+        assert len(TOOLS) == 7
 
     def test_assumptions_tool_names(self):
         from pm_mcp_servers.pm_assumptions.registry import TOOLS

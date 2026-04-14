@@ -11,6 +11,7 @@ from .server import (
     _export_assumption_graph,
     _fetch_external_signal,
     _detect_external_drift,
+    _generate_assumption_report,
     _load_assumption_register,
     _score_assumption_confidence,
 )
