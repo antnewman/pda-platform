@@ -175,10 +175,10 @@ class TestToolAggregation:
     """Test that tool aggregation in the unified server is correct."""
 
     def test_total_tool_count(self):
-        """Unified server has exactly 116 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6)."""
+        """Unified server has exactly 121 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+5)."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
-        assert len(ALL_TOOLS) == 116
+        assert len(ALL_TOOLS) == 121
 
     def test_no_duplicate_tool_names(self):
         """No two tools share the same name across modules."""
@@ -195,14 +195,14 @@ class TestToolAggregation:
         assert len(missing) == 0, f"Tools without dispatch: {missing}"
 
     def test_tool_ordering(self):
-        """Tools appear in module order: data, analyse, validate, nista, assure, brm, portfolio, ev, synthesis, risk, change, resource, financial, knowledge, simulation, lessons, reporting."""
+        """Tools appear in module order: data, analyse, validate, nista, assure, brm, portfolio, ev, synthesis, risk, change, resource, financial, knowledge, simulation, lessons, reporting, assumptions."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
         names = [t.name for t in ALL_TOOLS]
         # First tool should be from pm-data
         assert names[0] == "load_project"
-        # Last tool should be from pm-reporting
-        assert names[-1] == "export_sro_dashboard_data"
+        # Last tool should be from pm-assumptions
+        assert names[-1] == "export_assumption_dashboard"
 
     def test_all_tools_have_valid_schemas(self):
         """Every tool has a name, description, and inputSchema."""
@@ -438,6 +438,13 @@ class TestExpectedTools:
             | TestSimulationModule.EXPECTED_SIMULATION_TOOLS
             | self.EXPECTED_LESSONS_TOOLS
             | self.EXPECTED_REPORTING_TOOLS
+            | {
+                "load_assumption_register",
+                "score_assumption_confidence",
+                "fetch_external_signal",
+                "detect_external_drift",
+                "export_assumption_dashboard",
+            }
         )
         assert actual == expected
 
@@ -624,3 +631,65 @@ class TestUnifiedDispatch:
         result = await call_tool("nonexistent_tool_xyz", {})
         assert len(result) == 1
         assert "Unknown tool" in result[0].text
+
+
+class TestAssumptionsModule:
+    """Tests for the pm-assumptions module registry and tool definitions."""
+
+    EXPECTED_ASSUMPTIONS_TOOLS = {
+        "load_assumption_register",
+        "score_assumption_confidence",
+        "fetch_external_signal",
+        "detect_external_drift",
+        "export_assumption_dashboard",
+    }
+
+    def test_assumptions_registry_loads(self):
+        from pm_mcp_servers.pm_assumptions.registry import TOOLS
+
+        assert len(TOOLS) == 5
+
+    def test_assumptions_tool_names(self):
+        from pm_mcp_servers.pm_assumptions.registry import TOOLS
+
+        actual = {t.name for t in TOOLS}
+        assert actual == self.EXPECTED_ASSUMPTIONS_TOOLS
+
+    def test_assumptions_tools_in_unified(self):
+        from pm_mcp_servers.pda_platform.server import ALL_TOOLS
+
+        actual = {t.name for t in ALL_TOOLS}
+        assert self.EXPECTED_ASSUMPTIONS_TOOLS.issubset(actual)
+
+    def test_all_assumptions_tools_have_dispatch(self):
+        from pm_mcp_servers.pm_assumptions.registry import TOOLS, _DISPATCH
+
+        for tool in TOOLS:
+            assert tool.name in _DISPATCH, f"No dispatch for {tool.name}"
+
+    def test_load_assumption_register_required_params(self):
+        from pm_mcp_servers.pm_assumptions.registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "load_assumption_register")
+        required = tool.inputSchema.get("required", [])
+        assert "project_id" in required
+        assert "file_path" in required
+
+    def test_fetch_external_signal_enum_values(self):
+        from pm_mcp_servers.pm_assumptions.registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "fetch_external_signal")
+        props = tool.inputSchema.get("properties", {})
+        assert "enum" in props["indicator"]
+        assert "ons" in props["source"]["enum"]
+        assert "world_bank" in props["source"]["enum"]
+
+    def test_detect_external_drift_required_params(self):
+        from pm_mcp_servers.pm_assumptions.registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "detect_external_drift")
+        required = tool.inputSchema.get("required", [])
+        assert "project_id" in required
+        assert "assumption_id" in required
+        assert "indicator" in required
+        assert "source" in required

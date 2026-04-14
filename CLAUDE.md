@@ -1,14 +1,14 @@
 # Claude Code Instructions — PDA Platform
 
 ## Project Overview
-The PDA Platform is a Python monorepo providing AI-powered project delivery assurance for UK government. It exposes 116 MCP tools across 17 modules via a unified server, deployable locally or via Render.
+The PDA Platform is a Python monorepo providing AI-powered project delivery assurance for UK government. It exposes 121 MCP tools across 18 modules via a unified server, deployable locally or via Render.
 
 ## Repo Structure
 ```
 packages/
   pda-platform/          Meta-package (pip install pda-platform)
   pm-data-tools/         Core library: parsers, validators, AssuranceStore (SQLite)
-  pm-mcp-servers/        17 MCP modules, 116 tools
+  pm-mcp-servers/        18 MCP modules, 121 tools
   agent-task-planning/   AI reliability: confidence extraction, outlier mining
 docs/                    Practitioner guides and technical references
 .github/workflows/       publish.yml — PyPI publish on version tag
@@ -68,7 +68,7 @@ Use semantic versioning:
 
 ## MCP Tool Count — Keep in Sync
 
-The tool count (currently **116**) appears in multiple places. When adding new tools, update ALL of these:
+The tool count (currently **121**) appears in multiple places. When adding new tools, update ALL of these:
 
 | File | What to update |
 |---|---|
@@ -149,9 +149,10 @@ Current documentation status (update this when docs are written):
 | pm-resource | ✅ | ✅ v2.0 | n/a | partial |
 | pm-financial | ✅ | ✅ v2.0 | n/a | ✅ |
 | pm-knowledge | ✅ | ✅ v2.0 | n/a | ✅ |
-| pm-simulation | n/a | ✅ v2.1 | n/a | partial |
-| pm-lessons | ✅ | ✅ v2.1 | ✅ | partial |
-| pm-reporting | ✅ | ✅ v2.1 | n/a | partial |
+| pm-simulation | n/a | ✅ v2.2 | n/a | partial |
+| pm-lessons | ✅ | ✅ v2.2 | ✅ | partial |
+| pm-reporting | ✅ | ✅ v2.2 | n/a | partial |
+| pm-assumptions | n/a | ✅ v2.2 | n/a | partial |
 
 ## Adding a New MCP Module
 

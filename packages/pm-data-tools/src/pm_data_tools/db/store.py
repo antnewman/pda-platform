@@ -510,6 +510,32 @@ class AssuranceStore:
                     extracted_at    TEXT DEFAULT (datetime('now')),
                     source_excerpt  TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS assumption_confidence_scores (
+                    id              TEXT PRIMARY KEY,
+                    project_id      TEXT NOT NULL,
+                    assumption_id   TEXT NOT NULL,
+                    score           REAL NOT NULL,
+                    rag             TEXT NOT NULL,
+                    review_age_days REAL,
+                    source_credibility_score REAL,
+                    data_backing_score REAL,
+                    likelihood_penalty REAL,
+                    explanation     TEXT,
+                    scored_at       TEXT DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS external_signals (
+                    id              TEXT PRIMARY KEY,
+                    indicator       TEXT NOT NULL,
+                    source          TEXT NOT NULL,
+                    value           REAL NOT NULL,
+                    unit            TEXT,
+                    signal_date     TEXT NOT NULL,
+                    fetched_at      TEXT DEFAULT (datetime('now')),
+                    url             TEXT,
+                    notes           TEXT
+                );
                 """
             )
 
@@ -2777,3 +2803,80 @@ class AssuranceStore:
             )
             rows = cursor.fetchall()
         return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Assumption confidence scores (pm-assumptions)
+    # ------------------------------------------------------------------
+
+    def upsert_assumption_confidence_score(self, data: dict) -> None:
+        """Insert or replace a confidence score for an assumption."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO assumption_confidence_scores
+                    (id, project_id, assumption_id, score, rag,
+                     review_age_days, source_credibility_score,
+                     data_backing_score, likelihood_penalty, explanation, scored_at)
+                VALUES
+                    (:id, :project_id, :assumption_id, :score, :rag,
+                     :review_age_days, :source_credibility_score,
+                     :data_backing_score, :likelihood_penalty, :explanation,
+                     datetime('now'))
+                """,
+                data,
+            )
+
+    def get_assumption_confidence_scores(self, project_id: str) -> list[dict]:
+        """Return all confidence scores for a project."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM assumption_confidence_scores
+                WHERE project_id = ?
+                ORDER BY scored_at DESC
+                """,
+                (project_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    # ------------------------------------------------------------------
+    # External signals (pm-assumptions)
+    # ------------------------------------------------------------------
+
+    def upsert_external_signal(self, data: dict) -> None:
+        """Insert or replace an external signal record."""
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO external_signals
+                    (id, indicator, source, value, unit,
+                     signal_date, fetched_at, url, notes)
+                VALUES
+                    (:id, :indicator, :source, :value, :unit,
+                     :signal_date, datetime('now'), :url, :notes)
+                """,
+                data,
+            )
+
+    def get_external_signal(self, indicator: str, source: str) -> dict | None:
+        """Return the most recent signal for an indicator/source pair."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM external_signals
+                WHERE indicator = ? AND source = ?
+                ORDER BY fetched_at DESC
+                LIMIT 1
+                """,
+                (indicator, source),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_all_external_signals(self) -> list[dict]:
+        """Return all cached external signals."""
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM external_signals ORDER BY fetched_at DESC"
+            )
+            return [dict(row) for row in cursor.fetchall()]
