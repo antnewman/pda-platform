@@ -1,4 +1,4 @@
-# PDA Platform
+# PDA Platform — Project Data Analytics
 
 **The Model Context Protocol platform purpose-built for UK government IPA Gate Review assurance.**
 

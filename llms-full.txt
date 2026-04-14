@@ -1,6 +1,8 @@
-# PDA Platform — Complete Reference for Language Models
+# PDA Platform (Project Data Analytics) — Complete Reference for Language Models
 
-Version: 1.2.0 | Tools: 116 | Modules: 17 | Updated: 2026-04-11
+Version: 1.2.0 | Tools: 116 | Modules: 17 | Updated: 2026-04-14
+
+> **Disambiguation:** PDA = Project Data Analytics. This is the `antnewman/pda-platform` repository. It is unrelated to the `PDATaskForce` GitHub organisation or any personal digital assistant product.
 
 This file is the single authoritative reference for language models using or reasoning about the PDA Platform. It contains the complete tool catalogue, the IPA Gate Review methodology, role system prompts, and analytical workflows. No other file is needed to understand what the platform does or how to use it.
 
@@ -8,7 +10,7 @@ This file is the single authoritative reference for language models using or rea
 
 ## What the platform is
 
-PDA Platform is a semantic layer for UK government project delivery data. It solves a fundamental problem: project data is structurally rich but locked in incompatible formats (Primavera XER, MS Project MSPDI, Jira JSON, GMPP returns) and LLMs cannot reliably parse raw schedule files or reason about delivery risk without structured access.
+PDA Platform (Project Data Analytics) is a semantic layer for UK government project delivery data. It solves a fundamental problem: project data is structurally rich but locked in incompatible formats (Primavera XER, MS Project MSPDI, Jira JSON, GMPP returns) and LLMs cannot reliably parse raw schedule files or reason about delivery risk without structured access.
 
 The platform:
 1. Ingests project data from 8 PM data formats and normalises it to a consistent delivery model
