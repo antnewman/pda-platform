@@ -49,7 +49,7 @@ dependencies = [
     "mcp>=0.9.0",
     "pm-data-tools>=1.0.0",
     "uvicorn>=0.20.0",
-    "starlette>=0.27.0",
+    "starlette>=0.27.0,<1.0.0",
     "anthropic>=0.18.0",
 ]
 
