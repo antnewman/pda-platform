@@ -994,87 +994,101 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
 
 
+def build_assumption_dashboard_panels(
+    project_id: str,
+    db_path: str | None = None,
+) -> dict:
+    """Assemble the UDS panel data dict for a project's assumption dashboard.
+
+    No file I/O — returns the dict directly so it can be used by both the
+    MCP export tool (which writes to disk) and the remote HTTP endpoint
+    (which serves it as JSON). Read-only against the AssuranceStore.
+    """
+    store = AssuranceStore(db_path) if db_path else AssuranceStore()
+
+    assumptions = store.get_assumptions(project_id)
+    confidence_scores = store.get_assumption_confidence_scores(project_id)
+    external_signals = store.get_all_external_signals()
+
+    # Build confidence lookup (latest scored_at wins if multiple)
+    cs_lookup: dict[str, dict] = {}
+    for cs in confidence_scores:
+        aid = cs["assumption_id"]
+        if aid not in cs_lookup or cs["scored_at"] > cs_lookup[aid]["scored_at"]:
+            cs_lookup[aid] = cs
+
+    # Category RAG breakdown
+    cat_rag: dict[str, dict[str, int]] = {}
+    scored_list = []
+    for a in assumptions:
+        cat = a.get("category", "GENERAL")
+        cs = cs_lookup.get(a.get("id", "")) or {}
+        rag = cs.get("rag", "AMBER")
+        cat_rag.setdefault(cat, {"RED": 0, "AMBER": 0, "GREEN": 0})
+        cat_rag[cat][rag] += 1
+
+        display_id = a.get("id", "").replace(f"{project_id}-", "")
+        scored_list.append({
+            "id": display_id,
+            "text": (a.get("text") or "")[:80],
+            "category": cat,
+            "score": cs.get("score", 50),
+            "rag": rag,
+            "explanation": cs.get("explanation", ""),
+        })
+
+    scored_list.sort(key=lambda x: x["score"])
+    top5 = scored_list[:5]
+
+    # Overall drift score from store (may not be present)
+    overall_drift = None
+    try:
+        drift_data = store.get_assumption_drift(project_id)
+        overall_drift = drift_data.get("drift_score")
+    except Exception:
+        pass
+
+    stale_count = sum(1 for a in assumptions if not a.get("last_validated"))
+
+    return {
+        "project_id": project_id,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "summary": {
+            "total_assumptions": len(assumptions),
+            "stale_count": stale_count,
+            "overall_drift_score": overall_drift,
+            "rag_counts": {
+                "RED": sum(1 for s in scored_list if s["rag"] == "RED"),
+                "AMBER": sum(1 for s in scored_list if s["rag"] == "AMBER"),
+                "GREEN": sum(1 for s in scored_list if s["rag"] == "GREEN"),
+            },
+        },
+        "category_rag_breakdown": {
+            cat: rags for cat, rags in sorted(cat_rag.items())
+        },
+        "top5_lowest_confidence": top5,
+        "external_signals": [
+            {
+                "indicator": s.get("indicator"),
+                "source": s.get("source"),
+                "value": s.get("value"),
+                "unit": s.get("unit"),
+                "signal_date": s.get("signal_date"),
+                "fetched_at": s.get("fetched_at"),
+            }
+            for s in external_signals
+        ],
+        "all_assumptions": scored_list,
+    }
+
+
 async def _export_assumption_dashboard(arguments: dict) -> list[TextContent]:
     project_id = arguments["project_id"]
     output_dir = arguments["output_dir"]
     db_path = arguments.get("db_path")
-    store = AssuranceStore(db_path) if db_path else AssuranceStore()
 
     try:
-        assumptions = store.get_assumptions(project_id)
-        confidence_scores = store.get_assumption_confidence_scores(project_id)
-        external_signals = store.get_all_external_signals()
-
-        # Build confidence lookup
-        cs_lookup: dict[str, dict] = {}
-        for cs in confidence_scores:
-            aid = cs["assumption_id"]
-            if aid not in cs_lookup or cs["scored_at"] > cs_lookup[aid]["scored_at"]:
-                cs_lookup[aid] = cs
-
-        # Category RAG breakdown
-        cat_rag: dict[str, dict[str, int]] = {}
-        scored_list = []
-        for a in assumptions:
-            cat = a.get("category", "GENERAL")
-            cs = cs_lookup.get(a.get("id", "")) or {}
-            rag = cs.get("rag", "AMBER")
-            cat_rag.setdefault(cat, {"RED": 0, "AMBER": 0, "GREEN": 0})
-            cat_rag[cat][rag] += 1
-
-            display_id = a.get("id", "").replace(f"{project_id}-", "")
-            scored_list.append({
-                "id": display_id,
-                "text": (a.get("text") or "")[:80],
-                "category": cat,
-                "score": cs.get("score", 50),
-                "rag": rag,
-                "explanation": cs.get("explanation", ""),
-            })
-
-        scored_list.sort(key=lambda x: x["score"])
-        top5 = scored_list[:5]
-
-        # Overall drift score from store
-        overall_drift = None
-        try:
-            drift_data = store.get_assumption_drift(project_id)
-            overall_drift = drift_data.get("drift_score")
-        except Exception:
-            pass
-
-        stale_count = sum(1 for a in assumptions if not a.get("last_validated"))
-
-        panels = {
-            "project_id": project_id,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "summary": {
-                "total_assumptions": len(assumptions),
-                "stale_count": stale_count,
-                "overall_drift_score": overall_drift,
-                "rag_counts": {
-                    "RED": sum(1 for s in scored_list if s["rag"] == "RED"),
-                    "AMBER": sum(1 for s in scored_list if s["rag"] == "AMBER"),
-                    "GREEN": sum(1 for s in scored_list if s["rag"] == "GREEN"),
-                },
-            },
-            "category_rag_breakdown": {
-                cat: rags for cat, rags in sorted(cat_rag.items())
-            },
-            "top5_lowest_confidence": top5,
-            "external_signals": [
-                {
-                    "indicator": s.get("indicator"),
-                    "source": s.get("source"),
-                    "value": s.get("value"),
-                    "unit": s.get("unit"),
-                    "signal_date": s.get("signal_date"),
-                    "fetched_at": s.get("fetched_at"),
-                }
-                for s in external_signals
-            ],
-            "all_assumptions": scored_list,
-        }
+        panels = build_assumption_dashboard_panels(project_id, db_path)
 
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

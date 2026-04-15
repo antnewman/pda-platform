@@ -80,6 +80,13 @@ pm-knowledge-server = "pm_mcp_servers.pm_knowledge.server:main"
 pda-platform-server = "pm_mcp_servers.pda_platform.server:main"
 pda-platform-remote = "pm_mcp_servers.pda_platform.remote:main"
 
+[tool.setuptools.package-data]
+# Include UDS dashboard YAML specs shipped alongside the pm-assumptions
+# module. These are served by the remote HTTP server at
+# /dashboards/{name}.uds.yaml so that the platform owns its own
+# dashboards and UDS can load them from any hosted origin.
+"pm_mcp_servers.pm_assumptions" = ["dashboards/*.uds.yaml"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [

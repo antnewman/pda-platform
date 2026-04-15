@@ -1,0 +1,452 @@
+# PDA Platform: Assumption Drift Dashboard
+# Early-warning intelligence view for assumption health across a project.
+# Designed for hackathon demonstration of Challenge 5 — Assumption Drift
+# & Early Warning Intelligence (Major Projects Association).
+#
+# Data source: pm-assumptions export_assumption_dashboard tool
+# Panels: overall summary KPIs, category RAG breakdown, top 5 lowest-confidence
+#         assumptions, external signals table, full assumptions register.
+
+uds: "0.1.0"
+
+metadata:
+  id: "pda-assumption-drift-v1"
+  name: "assumption-drift"
+  version: "1.0.0"
+  created_at: "2026-04-14T00:00:00Z"
+  authors:
+    - name: "PDA Task Force"
+      email: "pda@tortoiseai.co.uk"
+  tags: ["assumptions", "drift", "early-warning", "assurance", "hackathon"]
+
+dashboard:
+  title: "Assumption Drift & Early Warning"
+  description: "Live assumption health — confidence scores, drift detection, and external signal comparison across all project assumptions"
+  intent: "Surface assumption drift before it becomes delivery risk. Identify which assumptions are stale, externally invalidated, or cascading."
+
+  decisions:
+    - "Which assumptions are most at risk of being wrong?"
+    - "Has any assumption drifted beyond its tolerance based on external data?"
+    - "Which assumption failures would cascade to multiple deliverables?"
+    - "Where should the project team focus validation effort first?"
+
+  persona:
+    type: analyst
+    characteristics:
+      attention_span: moderate
+      data_literacy: high
+      interaction_preference: moderate
+      primary_device: desktop
+      update_frequency: periodic
+
+  variables:
+    - id: project_id
+      label: "Project"
+      type: string
+      default: ""
+
+  layout:
+    type: sections
+    sections:
+      - id: summary
+        title: "Assumption Health Summary"
+        collapsible: false
+        layout:
+          type: grid
+          columns: 12
+          row_height: 90
+      - id: at_risk
+        title: "Highest Risk Assumptions"
+        collapsible: false
+        layout:
+          type: grid
+          columns: 12
+          row_height: 60
+      - id: external
+        title: "External Signal Comparison"
+        collapsible: false
+        layout:
+          type: grid
+          columns: 12
+          row_height: 60
+      - id: register
+        title: "Full Assumption Register"
+        collapsible: true
+        collapsed: false
+        layout:
+          type: grid
+          columns: 12
+          row_height: 60
+
+  panels:
+    # =====================================================================
+    # SECTION: Summary — total, stale, RAG counts
+    # =====================================================================
+
+    - id: total_assumptions
+      type: kpi
+      title: "Total Assumptions"
+      description: "Number of assumptions loaded into the register for this project"
+      section: summary
+      position:
+        row: 0
+        column: 0
+        width: 3
+        height: 3
+
+      data:
+        source: static
+        panel_key: summary.total_assumptions
+
+      options:
+        format:
+          style: number
+          precision: 0
+        layout:
+          value_size: xlarge
+
+      accessibility:
+        alt_text: "Total number of assumptions in the register"
+
+    - id: stale_count
+      type: kpi
+      title: "Stale (Never Validated)"
+      description: "Assumptions that have never been validated since logging"
+      section: summary
+      position:
+        row: 0
+        column: 3
+        width: 3
+        height: 3
+
+      data:
+        source: static
+        panel_key: summary.stale_count
+
+      options:
+        format:
+          style: number
+          precision: 0
+        layout:
+          value_size: xlarge
+        thresholds:
+          mode: absolute
+          values:
+            - max: 0
+              status: positive
+              label: "All validated"
+            - max: 3
+              status: warning
+              label: "Some stale"
+            - min: 3
+              status: negative
+              label: "Action needed"
+
+      accessibility:
+        alt_text: "Count of assumptions never validated since logging"
+
+    - id: red_count
+      type: kpi
+      title: "RED Confidence"
+      description: "Assumptions with confidence score below 40 — highest risk"
+      section: summary
+      position:
+        row: 0
+        column: 6
+        width: 3
+        height: 3
+
+      data:
+        source: static
+        panel_key: summary.rag_counts.RED
+
+      options:
+        format:
+          style: number
+          precision: 0
+        layout:
+          value_size: xlarge
+        thresholds:
+          mode: absolute
+          values:
+            - max: 0
+              status: positive
+              label: "None"
+            - max: 2
+              status: warning
+              label: "Monitor"
+            - min: 2
+              status: negative
+              label: "Escalate"
+
+      accessibility:
+        alt_text: "Number of assumptions with RED confidence rating"
+
+    - id: amber_count
+      type: kpi
+      title: "AMBER Confidence"
+      description: "Assumptions with confidence score 40–69 — requires monitoring"
+      section: summary
+      position:
+        row: 0
+        column: 9
+        width: 3
+        height: 3
+
+      data:
+        source: static
+        panel_key: summary.rag_counts.AMBER
+
+      options:
+        format:
+          style: number
+          precision: 0
+        layout:
+          value_size: xlarge
+        thresholds:
+          mode: absolute
+          values:
+            - max: 3
+              status: neutral
+              label: "Acceptable"
+            - min: 3
+              status: warning
+              label: "Review needed"
+
+      accessibility:
+        alt_text: "Number of assumptions with AMBER confidence rating"
+
+    # =====================================================================
+    # SECTION: Top 5 Lowest Confidence (At Risk)
+    # =====================================================================
+
+    - id: top5_lowest_confidence
+      type: table
+      title: "Top 5 At-Risk Assumptions"
+      description: "The five assumptions with the lowest confidence scores — sorted by risk ascending"
+      section: at_risk
+      position:
+        row: 0
+        column: 0
+        width: 12
+        height: 6
+
+      data:
+        source: static
+        panel_key: top5_lowest_confidence
+
+      options:
+        columns:
+          - field: id
+            label: "ID"
+            width: 70
+            align: center
+            sortable: true
+          - field: text
+            label: "Assumption"
+            width: 340
+            align: left
+            sortable: false
+          - field: category
+            label: "Category"
+            width: 140
+            align: center
+            sortable: true
+          - field: score
+            label: "Confidence"
+            width: 90
+            align: center
+            sortable: true
+          - field: rag
+            label: "RAG"
+            width: 80
+            align: center
+            sortable: true
+          - field: explanation
+            label: "Reason"
+            width: 300
+            align: left
+            sortable: false
+        sorting:
+          initial:
+            field: score
+            order: asc
+        pagination:
+          enabled: false
+        row_height: comfortable
+        zebra_striping: true
+        conditional_formatting:
+          - field: rag
+            rules:
+              - value: "RED"
+                background: "#FDECEA"
+                text_colour: "#B71C1C"
+              - value: "AMBER"
+                background: "#FFF8E1"
+                text_colour: "#856404"
+              - value: "GREEN"
+                background: "#E8F5E9"
+                text_colour: "#1B5E20"
+
+      accessibility:
+        alt_text: "Table of top 5 highest-risk assumptions sorted by confidence score ascending"
+
+    # =====================================================================
+    # SECTION: External Signals
+    # =====================================================================
+
+    - id: external_signals_table
+      type: table
+      title: "External Signal Cache"
+      description: "Live data points fetched from ONS and World Bank for assumption comparison"
+      section: external
+      position:
+        row: 0
+        column: 0
+        width: 12
+        height: 5
+
+      data:
+        source: static
+        panel_key: external_signals
+
+      options:
+        columns:
+          - field: indicator
+            label: "Indicator"
+            width: 200
+            align: left
+            sortable: true
+          - field: source
+            label: "Source"
+            width: 120
+            align: center
+            sortable: true
+          - field: value
+            label: "Value"
+            width: 90
+            align: right
+            sortable: true
+          - field: unit
+            label: "Unit"
+            width: 160
+            align: left
+            sortable: false
+          - field: signal_date
+            label: "Data Date"
+            width: 110
+            align: center
+            sortable: true
+          - field: fetched_at
+            label: "Fetched"
+            width: 160
+            align: center
+            sortable: true
+        sorting:
+          initial:
+            field: fetched_at
+            order: desc
+        pagination:
+          enabled: false
+        row_height: compact
+        zebra_striping: true
+
+      accessibility:
+        alt_text: "Table of external data signals fetched from public sources for assumption validation"
+
+    # =====================================================================
+    # SECTION: Full Register
+    # =====================================================================
+
+    - id: all_assumptions_table
+      type: table
+      title: "Full Assumption Register"
+      description: "All assumptions with confidence scores and RAG status"
+      section: register
+      position:
+        row: 0
+        column: 0
+        width: 12
+        height: 10
+
+      data:
+        source: static
+        panel_key: all_assumptions
+
+      options:
+        columns:
+          - field: id
+            label: "ID"
+            width: 70
+            align: center
+            sortable: true
+          - field: text
+            label: "Assumption"
+            width: 300
+            align: left
+            sortable: false
+          - field: category
+            label: "Category"
+            width: 140
+            align: center
+            sortable: true
+          - field: score
+            label: "Confidence"
+            width: 90
+            align: center
+            sortable: true
+          - field: rag
+            label: "RAG"
+            width: 80
+            align: center
+            sortable: true
+          - field: explanation
+            label: "Explanation"
+            width: 320
+            align: left
+            sortable: false
+        sorting:
+          initial:
+            field: score
+            order: asc
+        pagination:
+          enabled: true
+          page_size: 10
+        row_height: comfortable
+        zebra_striping: true
+        conditional_formatting:
+          - field: rag
+            rules:
+              - value: "RED"
+                background: "#FDECEA"
+                text_colour: "#B71C1C"
+              - value: "AMBER"
+                background: "#FFF8E1"
+                text_colour: "#856404"
+              - value: "GREEN"
+                background: "#E8F5E9"
+                text_colour: "#1B5E20"
+
+      accessibility:
+        alt_text: "Full assumption register with confidence scores and RAG ratings"
+
+  theme:
+    mode: light
+    primary_colour: "#1F4E79"
+    secondary_colour: "#334155"
+    accent_colour: "#F59E0B"
+    font_family: "Inter, system-ui, sans-serif"
+
+  error_handling:
+    on_panel_error:
+      action: show_placeholder
+      message: "Dashboard data unavailable — run export_assumption_dashboard first"
+    on_source_error:
+      action: show_error
+      allow_partial: true
+
+  refresh:
+    enabled: false
+
+  accessibility:
+    alt_text: "Assumption Drift Dashboard showing confidence scores, RAG status, external signal comparison, and full assumption register"
