@@ -50,17 +50,17 @@ classifiers = [
 # Installing pda-platform pulls in everything needed to run the
 # unified 99-tool MCP server.
 dependencies = [
-    "agent-task-planning>=0.2.0",
-    "pm-data-tools>=1.0.0",
-    "pm-mcp-servers>=1.0.0",
+    "agent-task-planning>=0.2.0,<2.0.0",
+    "pm-data-tools>=1.0.0,<2.0.0",
+    "pm-mcp-servers>=1.0.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
 # Full install including AI mining and optional LLM clients
 full = [
-    "agent-task-planning[mining,anthropic]>=0.2.0",
-    "pm-data-tools[all]>=1.0.0",
-    "pm-mcp-servers>=1.0.0",
+    "agent-task-planning[mining,anthropic]>=0.2.0,<2.0.0",
+    "pm-data-tools[all]>=1.0.0,<2.0.0",
+    "pm-mcp-servers>=1.0.0,<2.0.0",
 ]
 
 [project.urls]

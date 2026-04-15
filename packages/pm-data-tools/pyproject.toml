@@ -47,12 +47,12 @@ classifiers = [
 ]
 
 dependencies = [
-    "lxml>=5.0.0",
-    "click>=8.0.0",
-    "pydantic>=2.0.0",
-    "python-dateutil>=2.8.0",
-    "httpx[http2]>=0.25.0",
-    "agent-task-planning>=0.2.0",
+    "lxml>=5.0.0,<7.0.0",
+    "click>=8.0.0,<9.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "python-dateutil>=2.8.0,<3.0.0",
+    "httpx[http2]>=0.25.0,<1.0.0",
+    "agent-task-planning>=0.2.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
