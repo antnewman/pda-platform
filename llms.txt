@@ -1,6 +1,6 @@
 # PDA Platform — Project Data Analytics
 
-> **PDA = Project Data Analytics.** Not a personal digital assistant, not the PDATaskForce org on GitHub. This is a purpose-built MCP platform for UK government IPA Gate Review assurance. 123 tools across 18 modules. Connect Claude or any MCP-compatible AI in under 60 seconds.
+> **PDA = Project Data Analytics.** Not a personal digital assistant, not the PDATaskForce org on GitHub. This is a purpose-built MCP platform for UK government IPA Gate Review assurance. 124 tools across 18 modules. Connect Claude or any MCP-compatible AI in under 60 seconds.
 
 ## What it is
 
@@ -40,4 +40,4 @@ The platform is aligned to UK government delivery standards: IPA Gate Reviews (G
 - **pm-simulation** (2) — Monte Carlo schedule simulation, P50/P80/P90 delivery dates
 - **pm-lessons** (5) — AI lessons extraction from gate reviews/PIRs, systemic pattern analysis
 - **pm-reporting** (6) — gate review summaries, SRO dashboards, board exception reports, PIR templates
-- **pm-assumptions** (7) — assumption drift detection, confidence scoring, live external signals (ONS/World Bank), AI executive reports with recommended actions, cascade analysis, UDS dashboard
+- **pm-assumptions** (8) — assumption drift detection, confidence scoring, live external signals (ONS/World Bank), AI executive reports with recommended actions, cascade analysis, UDS dashboard
