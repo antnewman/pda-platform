@@ -17,14 +17,23 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 
-from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route
+# Print to stderr immediately so Render logs show we've started, even if
+# later imports fail. This helps diagnose silent import crashes.
+print("[pda-platform-remote] starting imports...", file=sys.stderr, flush=True)
 
-from .server import ALL_TOOLS, server
+from mcp.server.sse import SseServerTransport  # noqa: E402
+from starlette.applications import Starlette  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+from starlette.routing import Route  # noqa: E402
+
+print("[pda-platform-remote] transport/web imports ok", file=sys.stderr, flush=True)
+
+from .server import ALL_TOOLS, server  # noqa: E402
+
+print(f"[pda-platform-remote] loaded {len(ALL_TOOLS)} tools", file=sys.stderr, flush=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
