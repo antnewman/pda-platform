@@ -83,7 +83,18 @@
       "Bash(wsl --status)",
       "Bash(wsl bash:*)",
       "Bash(gh pr create --title 'feat: 99 tools, pm-knowledge module, MCP registry, and full documentation overhaul' --body ':*)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(pandoc \"C:/Users/antjs/Projects/pda-platform/hackathon-local/Challenge 5/RFP - SOR.docx\" -t plain)",
+      "Bash(sed -i 's/116 tools · 17 modules/121 tools · 18 modules/g' README.md)",
+      "Bash(sed -i 's/\\\\*\\\\*116 structured tools\\\\*\\\\*/\\\\*\\\\*121 structured tools\\\\*\\\\*/g' README.md)",
+      "Bash(sed -i 's/What Claude can do with 116 tools/What Claude can do with 121 tools/g' README.md)",
+      "Bash(sed -i 's/17 MCP modules, 116 tools for AI integration/18 MCP modules, 121 tools for AI integration/g' README.md)",
+      "Bash(sed -i 's/Parameter-level reference for all 116 tools/Parameter-level reference for all 121 tools/g' README.md)",
+      "Bash(sed -i 's/121 tools · 18 modules/122 tools · 18 modules/g' README.md)",
+      "Bash(sed -i 's/\\\\*\\\\*121 structured tools\\\\*\\\\*/\\\\*\\\\*122 structured tools\\\\*\\\\*/g' README.md)",
+      "Bash(sed -i 's/What Claude can do with 121 tools/What Claude can do with 122 tools/g' README.md)",
+      "Bash(sed -i 's/18 MCP modules, 121 tools for AI integration/18 MCP modules, 122 tools for AI integration/g' README.md)",
+      "Bash(sed -i 's/Parameter-level reference for all 121 tools/Parameter-level reference for all 122 tools/g' README.md)"
     ]
   }
 }

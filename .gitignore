@@ -64,6 +64,9 @@ Thumbs.db
 *_debug.db
 demo_*.json
 
+# Local hackathon working folder
+hackathon-local/
+
 # Internal docs (not for public repo)
 ASSUMPTION_DRIFT_PROMPT.md
 

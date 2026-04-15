@@ -1,6 +1,6 @@
 """PDA Platform — unified MCP server.
 
-Aggregates all seventeen PDA MCP servers into a single endpoint:
+Aggregates all eighteen PDA MCP servers into a single endpoint:
 
   pm-data        ( 6 tools)   Project data loading, querying, conversion
   pm-analyse     ( 7 tools)   AI-powered risk, forecasting, health assessment, narrative divergence detection
@@ -19,8 +19,9 @@ Aggregates all seventeen PDA MCP servers into a single endpoint:
   pm-simulation  ( 2 tools)   Monte Carlo schedule and cost simulation with PERT/triangular distributions
   pm-lessons     ( 5 tools)   AI extraction of lessons learned from gate reviews/PIRs, cross-project pattern analysis
   pm-reporting   ( 6 tools)   IPA-format governance documents, SRO dashboard, board exception reports, PIR templates
+  pm-assumptions ( 7 tools)   Assumption drift detection, confidence scoring, live external signal integration, executive reporting, graph export
 
-Total: 116 tools accessible through one connection.
+Total: 123 tools accessible through one connection.
 """
 
 from __future__ import annotations
@@ -67,6 +68,8 @@ from ..pm_lessons.registry import TOOLS as LESSONS_TOOLS
 from ..pm_lessons.registry import dispatch as lessons_dispatch
 from ..pm_reporting.registry import TOOLS as REPORTING_TOOLS
 from ..pm_reporting.registry import dispatch as reporting_dispatch
+from ..pm_assumptions.registry import TOOLS as ASSUMPTIONS_TOOLS
+from ..pm_assumptions.registry import dispatch as assumptions_dispatch
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,6 +96,7 @@ for _tools, _dispatch_fn in [
     (SIMULATION_TOOLS, simulation_dispatch),
     (LESSONS_TOOLS, lessons_dispatch),
     (REPORTING_TOOLS, reporting_dispatch),
+    (ASSUMPTIONS_TOOLS, assumptions_dispatch),
 ]:
     for _tool in _tools:
         _TOOL_DISPATCH[_tool.name] = _dispatch_fn
@@ -101,13 +105,13 @@ ALL_TOOLS: list[Tool] = (
     DATA_TOOLS + ANALYSE_TOOLS + VALIDATE_TOOLS + NISTA_TOOLS
     + ASSURE_TOOLS + BRM_TOOLS + PORTFOLIO_TOOLS + EV_TOOLS + SYNTHESIS_TOOLS
     + RISK_TOOLS + CHANGE_TOOLS + RESOURCE_TOOLS + FINANCIAL_TOOLS + KNOWLEDGE_TOOLS
-    + SIMULATION_TOOLS + LESSONS_TOOLS + REPORTING_TOOLS
+    + SIMULATION_TOOLS + LESSONS_TOOLS + REPORTING_TOOLS + ASSUMPTIONS_TOOLS
 )
 
 logger.info(
     "PDA Platform unified server: %d tools from %d modules",
     len(ALL_TOOLS),
-    17,
+    18,  # modules
 )
 
 
