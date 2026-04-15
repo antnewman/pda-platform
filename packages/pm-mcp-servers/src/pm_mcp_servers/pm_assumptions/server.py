@@ -312,6 +312,50 @@ ASSUMPTIONS_TOOLS: list[Tool] = [
             "required": ["project_id"],
         },
     ),
+    Tool(
+        name="export_assumption_html_dashboard",
+        description=(
+            "Export a standalone single-file HTML dashboard for assumption health. "
+            "Produces a self-contained HTML file with inline CSS and inline data — "
+            "no external dependencies, no server required, works offline in any "
+            "modern browser. Suitable for emailing, printing, attaching to "
+            "submissions, or presenting from any machine. "
+            "Contains: executive summary narrative, RAG breakdown with coloured "
+            "cards, external signals panel, top at-risk assumptions table with "
+            "RAG pills, prioritised governance actions, and cascade risk summary. "
+            "Requires prior calls to score_assumption_confidence and "
+            "fetch_external_signal to populate the dashboard data. "
+            "Writes {project_id}-dashboard.html to output_dir."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project identifier.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Directory to write the HTML file.",
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Human-readable project name for the header.",
+                },
+                "gate_stage": {
+                    "type": "integer",
+                    "description": "IPA gate stage (0-5) for the report context.",
+                    "minimum": 0,
+                    "maximum": 5,
+                },
+                "db_path": {
+                    "type": "string",
+                    "description": "Optional path to the SQLite store.",
+                },
+            },
+            "required": ["project_id", "output_dir"],
+        },
+    ),
 ]
 
 # ---------------------------------------------------------------------------
@@ -950,87 +994,101 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
 
 
+def build_assumption_dashboard_panels(
+    project_id: str,
+    db_path: str | None = None,
+) -> dict:
+    """Assemble the UDS panel data dict for a project's assumption dashboard.
+
+    No file I/O — returns the dict directly so it can be used by both the
+    MCP export tool (which writes to disk) and the remote HTTP endpoint
+    (which serves it as JSON). Read-only against the AssuranceStore.
+    """
+    store = AssuranceStore(db_path) if db_path else AssuranceStore()
+
+    assumptions = store.get_assumptions(project_id)
+    confidence_scores = store.get_assumption_confidence_scores(project_id)
+    external_signals = store.get_all_external_signals()
+
+    # Build confidence lookup (latest scored_at wins if multiple)
+    cs_lookup: dict[str, dict] = {}
+    for cs in confidence_scores:
+        aid = cs["assumption_id"]
+        if aid not in cs_lookup or cs["scored_at"] > cs_lookup[aid]["scored_at"]:
+            cs_lookup[aid] = cs
+
+    # Category RAG breakdown
+    cat_rag: dict[str, dict[str, int]] = {}
+    scored_list = []
+    for a in assumptions:
+        cat = a.get("category", "GENERAL")
+        cs = cs_lookup.get(a.get("id", "")) or {}
+        rag = cs.get("rag", "AMBER")
+        cat_rag.setdefault(cat, {"RED": 0, "AMBER": 0, "GREEN": 0})
+        cat_rag[cat][rag] += 1
+
+        display_id = a.get("id", "").replace(f"{project_id}-", "")
+        scored_list.append({
+            "id": display_id,
+            "text": (a.get("text") or "")[:80],
+            "category": cat,
+            "score": cs.get("score", 50),
+            "rag": rag,
+            "explanation": cs.get("explanation", ""),
+        })
+
+    scored_list.sort(key=lambda x: x["score"])
+    top5 = scored_list[:5]
+
+    # Overall drift score from store (may not be present)
+    overall_drift = None
+    try:
+        drift_data = store.get_assumption_drift(project_id)
+        overall_drift = drift_data.get("drift_score")
+    except Exception:
+        pass
+
+    stale_count = sum(1 for a in assumptions if not a.get("last_validated"))
+
+    return {
+        "project_id": project_id,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "summary": {
+            "total_assumptions": len(assumptions),
+            "stale_count": stale_count,
+            "overall_drift_score": overall_drift,
+            "rag_counts": {
+                "RED": sum(1 for s in scored_list if s["rag"] == "RED"),
+                "AMBER": sum(1 for s in scored_list if s["rag"] == "AMBER"),
+                "GREEN": sum(1 for s in scored_list if s["rag"] == "GREEN"),
+            },
+        },
+        "category_rag_breakdown": {
+            cat: rags for cat, rags in sorted(cat_rag.items())
+        },
+        "top5_lowest_confidence": top5,
+        "external_signals": [
+            {
+                "indicator": s.get("indicator"),
+                "source": s.get("source"),
+                "value": s.get("value"),
+                "unit": s.get("unit"),
+                "signal_date": s.get("signal_date"),
+                "fetched_at": s.get("fetched_at"),
+            }
+            for s in external_signals
+        ],
+        "all_assumptions": scored_list,
+    }
+
+
 async def _export_assumption_dashboard(arguments: dict) -> list[TextContent]:
     project_id = arguments["project_id"]
     output_dir = arguments["output_dir"]
     db_path = arguments.get("db_path")
-    store = AssuranceStore(db_path) if db_path else AssuranceStore()
 
     try:
-        assumptions = store.get_assumptions(project_id)
-        confidence_scores = store.get_assumption_confidence_scores(project_id)
-        external_signals = store.get_all_external_signals()
-
-        # Build confidence lookup
-        cs_lookup: dict[str, dict] = {}
-        for cs in confidence_scores:
-            aid = cs["assumption_id"]
-            if aid not in cs_lookup or cs["scored_at"] > cs_lookup[aid]["scored_at"]:
-                cs_lookup[aid] = cs
-
-        # Category RAG breakdown
-        cat_rag: dict[str, dict[str, int]] = {}
-        scored_list = []
-        for a in assumptions:
-            cat = a.get("category", "GENERAL")
-            cs = cs_lookup.get(a.get("id", "")) or {}
-            rag = cs.get("rag", "AMBER")
-            cat_rag.setdefault(cat, {"RED": 0, "AMBER": 0, "GREEN": 0})
-            cat_rag[cat][rag] += 1
-
-            display_id = a.get("id", "").replace(f"{project_id}-", "")
-            scored_list.append({
-                "id": display_id,
-                "text": (a.get("text") or "")[:80],
-                "category": cat,
-                "score": cs.get("score", 50),
-                "rag": rag,
-                "explanation": cs.get("explanation", ""),
-            })
-
-        scored_list.sort(key=lambda x: x["score"])
-        top5 = scored_list[:5]
-
-        # Overall drift score from store
-        overall_drift = None
-        try:
-            drift_data = store.get_assumption_drift(project_id)
-            overall_drift = drift_data.get("drift_score")
-        except Exception:
-            pass
-
-        stale_count = sum(1 for a in assumptions if not a.get("last_validated"))
-
-        panels = {
-            "project_id": project_id,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "summary": {
-                "total_assumptions": len(assumptions),
-                "stale_count": stale_count,
-                "overall_drift_score": overall_drift,
-                "rag_counts": {
-                    "RED": sum(1 for s in scored_list if s["rag"] == "RED"),
-                    "AMBER": sum(1 for s in scored_list if s["rag"] == "AMBER"),
-                    "GREEN": sum(1 for s in scored_list if s["rag"] == "GREEN"),
-                },
-            },
-            "category_rag_breakdown": {
-                cat: rags for cat, rags in sorted(cat_rag.items())
-            },
-            "top5_lowest_confidence": top5,
-            "external_signals": [
-                {
-                    "indicator": s.get("indicator"),
-                    "source": s.get("source"),
-                    "value": s.get("value"),
-                    "unit": s.get("unit"),
-                    "signal_date": s.get("signal_date"),
-                    "fetched_at": s.get("fetched_at"),
-                }
-                for s in external_signals
-            ],
-            "all_assumptions": scored_list,
-        }
+        panels = build_assumption_dashboard_panels(project_id, db_path)
 
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1553,6 +1611,383 @@ async def _generate_assumption_report(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
 
 
+async def _export_assumption_html_dashboard(arguments: dict) -> list[TextContent]:
+    project_id = arguments["project_id"]
+    output_dir = arguments["output_dir"]
+    project_name = arguments.get("project_name", project_id)
+    gate_stage = arguments.get("gate_stage")
+    db_path = arguments.get("db_path")
+    store = AssuranceStore(db_path) if db_path else AssuranceStore()
+
+    try:
+        assumptions = store.get_assumptions(project_id)
+        if not assumptions:
+            return [TextContent(type="text", text=json.dumps({
+                "error": "No assumptions found. Run load_assumption_register first.",
+            }))]
+
+        confidence_scores = store.get_assumption_confidence_scores(project_id)
+        external_signals = store.get_all_external_signals()
+
+        # Build lookup for confidence scores by assumption id
+        score_lookup = {cs["assumption_id"]: cs for cs in confidence_scores}
+
+        # If no scores computed yet, compute inline
+        if not confidence_scores:
+            for a in assumptions:
+                notes = a.get("notes", "") or ""
+                if "Likelihood:" in notes:
+                    for part in notes.split("|"):
+                        part = part.strip()
+                        if part.startswith("Likelihood:"):
+                            a["likelihood_of_failure"] = part.split(":", 1)[1].strip()
+                cs = _compute_confidence(a)
+                score_lookup[a["id"]] = {**cs, "assumption_id": a["id"]}
+
+        # Enrich and sort
+        enriched = []
+        for a in assumptions:
+            aid = a["id"]
+            display_id = aid.replace(f"{project_id}-", "") if aid.startswith(project_id) else aid
+            cs = score_lookup.get(aid, {})
+            enriched.append({
+                "id": display_id,
+                "text": a.get("text", ""),
+                "category": a.get("category", ""),
+                "score": cs.get("score", 50.0),
+                "rag": cs.get("rag", "AMBER"),
+                "owner": a.get("owner", "TBC"),
+                "likelihood": a.get("likelihood_of_failure", ""),
+                "review_age_days": cs.get("review_age_days"),
+                "impact_if_false": a.get("impact_if_false", "") or "",
+                "dependencies": a.get("dependencies", "") or "",
+            })
+        enriched.sort(key=lambda x: x["score"])
+
+        red = [e for e in enriched if e["rag"] == "RED"]
+        amber = [e for e in enriched if e["rag"] == "AMBER"]
+        green = [e for e in enriched if e["rag"] == "GREEN"]
+        total = len(enriched)
+        avg_score = round(sum(e["score"] for e in enriched) / total, 1) if total else 0
+
+        if avg_score < 35:
+            health = "CRITICAL"
+        elif avg_score < 55:
+            health = "POOR"
+        elif avg_score < 70:
+            health = "MODERATE"
+        else:
+            health = "ADEQUATE"
+
+        # Cascade chains (RED assumptions with dependencies)
+        cascades = []
+        for e in enriched:
+            if e["rag"] == "RED" and e["dependencies"]:
+                deps = [d.strip() for d in e["dependencies"].split(",") if d.strip()]
+                if deps:
+                    cascades.append({
+                        "id": e["id"],
+                        "text": e["text"][:100],
+                        "deps": deps,
+                    })
+
+        gate_label = ""
+        if gate_stage is not None:
+            gate_labels = {0: "Strategic Assessment", 1: "Justification", 2: "Strategy",
+                          3: "Investment Decision", 4: "Readiness for Service", 5: "Operational Review"}
+            gate_label = f"Gate {gate_stage}: {gate_labels.get(gate_stage, '')}"
+
+        report_date = datetime.now().strftime("%d %B %Y")
+
+        # ── Build HTML ───────────────────────────────────────────────────────
+        def rag_color(rag):
+            return {"RED": "#DC2626", "AMBER": "#D97706", "GREEN": "#16A34A"}.get(rag, "#6B7280")
+
+        def esc(s):
+            return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+        # Top-10 worst table rows
+        worst_rows = ""
+        for e in enriched[:10]:
+            age = f"{int(e['review_age_days'])} days" if e.get('review_age_days') else "—"
+            worst_rows += f"""
+        <tr>
+          <td class="id">{esc(e['id'])}</td>
+          <td><span class="pill" style="background:{rag_color(e['rag'])}">{e['rag']}</span></td>
+          <td class="score">{e['score']:.1f}</td>
+          <td>{esc(e['category'])}</td>
+          <td class="text">{esc(e['text'][:120])}{'…' if len(e['text']) > 120 else ''}</td>
+          <td>{esc(e['owner'])}</td>
+          <td>{esc(e.get('likelihood','') or '—')}</td>
+          <td>{age}</td>
+        </tr>"""
+
+        # External signals cards
+        signals_html = ""
+        for s in external_signals[:6]:
+            signals_html += f"""
+        <div class="signal-card">
+          <div class="signal-label">{esc(s.get('indicator', '').replace('_',' ').upper())}</div>
+          <div class="signal-value">{s.get('value', '?')}<span class="signal-unit">{esc(s.get('unit',''))}</span></div>
+          <div class="signal-meta">{esc(s.get('source','').replace('_',' '))} · {esc(str(s.get('signal_date','unknown')))}</div>
+        </div>"""
+
+        # Cascade list
+        cascade_html = ""
+        if cascades:
+            for c in cascades[:5]:
+                deps_str = ", ".join(c['deps'][:4])
+                cascade_html += f"""
+        <li><strong>{esc(c['id'])}</strong> — {esc(c['text'])}<br>
+          <span class="cascade-deps">If this fails, at risk: {esc(deps_str)}</span>
+        </li>"""
+        else:
+            cascade_html = "<li class='none'>No cascade chains identified in this dataset.</li>"
+
+        # Governance actions
+        next_review_days = 14 if health in ("CRITICAL", "POOR") else 30 if health == "MODERATE" else 60
+        gov_actions = []
+        if gate_stage is not None and gate_stage >= 3:
+            gov_actions.append(f"Gate {gate_stage} reviewers will expect evidence of assumption validation — prepare a validation pack.")
+        gov_actions.append(f"Schedule assumption review board within {next_review_days} days.")
+        unowned = sum(1 for e in enriched if not e["owner"] or e["owner"] == "TBC")
+        if unowned:
+            gov_actions.append(f"Assign owners to all {unowned} unowned assumptions.")
+        else:
+            gov_actions.append("All assumptions have named owners — confirm active accountability.")
+        gov_actions.append("Update the risk register to reflect any RED assumptions with HIGH likelihood of failure.")
+        gov_actions.append("Commission external validation for assumptions where confidence score is below 30.")
+        gov_html = "".join(f"<li>{esc(a)}</li>" for a in gov_actions)
+
+        # Health narrative
+        if health == "CRITICAL":
+            narrative = f"The assumption base for {project_name} is in a critical condition. With {len(red)} of {total} assumptions rated RED and an average confidence score of {avg_score}/100, the project is carrying substantial unvalidated risk. Immediate SRO attention and accelerated validation are required."
+        elif health == "POOR":
+            narrative = f"{project_name} has a weak assumption base. {len(red)} assumptions are RED and {len(amber)} are AMBER — meaning {len(red)+len(amber)} of {total} ({round((len(red)+len(amber))/total*100)}%) carry unacceptable or borderline risk. A targeted validation campaign is needed."
+        elif health == "MODERATE":
+            narrative = f"{project_name} has a moderate assumption position. {len(amber)} assumptions require active management and {len(red)} need urgent attention. Confidence is trending below the level expected at this stage."
+        else:
+            narrative = f"{project_name}'s assumptions are broadly sound. The majority ({len(green)}) are GREEN with adequate confidence. Maintain regular reviews to prevent drift."
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{esc(project_name)} — Assumption Drift & Early Warning Dashboard</title>
+<style>
+  * {{ box-sizing: border-box; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #F8FAFC;
+    color: #0F172A;
+    line-height: 1.5;
+  }}
+  .container {{ max-width: 1200px; margin: 0 auto; padding: 32px 24px; }}
+  header {{
+    border-bottom: 4px solid #D946EF;
+    padding-bottom: 16px;
+    margin-bottom: 24px;
+  }}
+  header h1 {{ margin: 0; color: #334155; font-size: 28px; font-weight: 700; }}
+  header .subtitle {{ color: #64748B; font-size: 14px; margin-top: 4px; }}
+  header .meta {{ display: flex; gap: 24px; margin-top: 12px; font-size: 13px; color: #475569; }}
+  header .meta span {{ display: inline-block; }}
+  header .meta strong {{ color: #0F172A; }}
+
+  .health-banner {{
+    background: linear-gradient(135deg, {rag_color(enriched[0]['rag']) if enriched else '#6B7280'} 0%, #334155 100%);
+    color: white;
+    padding: 24px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+  }}
+  .health-banner .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.8; }}
+  .health-banner .rating {{ font-size: 36px; font-weight: 700; margin: 4px 0; }}
+  .health-banner .narrative {{ font-size: 15px; margin-top: 8px; opacity: 0.95; }}
+
+  .rag-grid {{ display: grid; grid-template-columns: repeat(3, 1fr) 2fr; gap: 16px; margin-bottom: 24px; }}
+  .rag-card {{
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    border-left: 6px solid;
+  }}
+  .rag-card.red {{ border-color: #DC2626; }}
+  .rag-card.amber {{ border-color: #D97706; }}
+  .rag-card.green {{ border-color: #16A34A; }}
+  .rag-card.score {{ border-color: #334155; }}
+  .rag-card .count {{ font-size: 40px; font-weight: 700; line-height: 1; color: #0F172A; }}
+  .rag-card .label {{ font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748B; margin-top: 8px; }}
+
+  section {{ margin-bottom: 32px; }}
+  section h2 {{
+    color: #334155;
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #E2E8F0;
+  }}
+
+  .signals-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }}
+  .signal-card {{
+    background: white;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 14px;
+  }}
+  .signal-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #64748B; font-weight: 600; }}
+  .signal-value {{ font-size: 28px; font-weight: 700; color: #0F172A; margin-top: 4px; }}
+  .signal-unit {{ font-size: 12px; color: #64748B; margin-left: 6px; font-weight: 400; }}
+  .signal-meta {{ font-size: 11px; color: #94A3B8; margin-top: 4px; }}
+
+  table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+  thead {{ background: #F1F5F9; }}
+  th, td {{ padding: 10px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid #E2E8F0; }}
+  th {{ color: #475569; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px; }}
+  td.id {{ font-family: "Courier New", monospace; font-weight: 600; color: #334155; }}
+  td.score {{ font-weight: 700; color: #0F172A; }}
+  td.text {{ color: #475569; max-width: 360px; }}
+  .pill {{ display: inline-block; padding: 3px 10px; border-radius: 12px; color: white; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; }}
+
+  .cascade-list {{ background: white; border-radius: 6px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+  .cascade-list li {{ margin: 0 0 12px; padding-left: 4px; }}
+  .cascade-list li.none {{ color: #94A3B8; font-style: italic; }}
+  .cascade-deps {{ display: inline-block; margin-top: 4px; color: #64748B; font-size: 12px; }}
+
+  .gov-actions {{ background: white; border-radius: 6px; padding: 16px 20px 16px 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+  .gov-actions li {{ margin: 0 0 10px; color: #334155; }}
+  .gov-actions li:first-child {{ color: #DC2626; font-weight: 600; }}
+
+  footer {{
+    margin-top: 48px;
+    padding-top: 16px;
+    border-top: 1px solid #E2E8F0;
+    font-size: 11px;
+    color: #94A3B8;
+    text-align: center;
+  }}
+  footer strong {{ color: #64748B; }}
+
+  @media print {{
+    body {{ background: white; }}
+    .container {{ max-width: none; padding: 16px; }}
+    section {{ page-break-inside: avoid; }}
+    .health-banner, .rag-card, .signal-card, table, .cascade-list, .gov-actions {{ box-shadow: none; }}
+  }}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header>
+    <h1>{esc(project_name)} — Assumption Drift &amp; Early Warning Dashboard</h1>
+    <div class="subtitle">Generated by the PDA Platform · pm-assumptions module</div>
+    <div class="meta">
+      <span><strong>Project:</strong> {esc(project_id)}</span>
+      <span><strong>Report date:</strong> {report_date}</span>
+      {f'<span><strong>Gate context:</strong> {esc(gate_label)}</span>' if gate_label else ''}
+      <span><strong>Platform tools:</strong> 124 (18 modules)</span>
+    </div>
+  </header>
+
+  <div class="health-banner">
+    <div class="label">Overall assumption health</div>
+    <div class="rating">{health}</div>
+    <div class="narrative">{esc(narrative)}</div>
+  </div>
+
+  <div class="rag-grid">
+    <div class="rag-card red">
+      <div class="count">{len(red)}</div>
+      <div class="label">RED assumptions</div>
+    </div>
+    <div class="rag-card amber">
+      <div class="count">{len(amber)}</div>
+      <div class="label">AMBER assumptions</div>
+    </div>
+    <div class="rag-card green">
+      <div class="count">{len(green)}</div>
+      <div class="label">GREEN assumptions</div>
+    </div>
+    <div class="rag-card score">
+      <div class="count">{avg_score} <span style="font-size:16px;color:#94A3B8;font-weight:400">/ 100</span></div>
+      <div class="label">Average confidence score</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>External signals (live data)</h2>
+    <div class="signals-grid">{signals_html if signals_html else '<div class="signal-card" style="grid-column:1/-1;color:#94A3B8">No external signals cached. Run fetch_external_signal to populate.</div>'}</div>
+  </section>
+
+  <section>
+    <h2>Top 10 at-risk assumptions</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>RAG</th>
+          <th>Score</th>
+          <th>Category</th>
+          <th>Assumption</th>
+          <th>Owner</th>
+          <th>Likelihood</th>
+          <th>Review age</th>
+        </tr>
+      </thead>
+      <tbody>{worst_rows}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Cascade risk chains</h2>
+    <ul class="cascade-list">{cascade_html}</ul>
+  </section>
+
+  <section>
+    <h2>Recommended governance actions</h2>
+    <ol class="gov-actions">{gov_html}</ol>
+  </section>
+
+  <footer>
+    Generated by <strong>PDA Platform</strong> · <strong>pm-assumptions</strong> · Tool: <code>export_assumption_html_dashboard</code><br>
+    Confidence formula: review recency (35%) × source credibility (30%) × data backing (35%), multiplied by likelihood penalty. RAG: GREEN ≥70, AMBER 40–69, RED &lt;40.<br>
+    This is a single-file offline HTML dashboard — no external dependencies, no server required.
+  </footer>
+
+</div>
+</body>
+</html>
+"""
+
+        out_path = Path(output_dir) / f"{project_id}-dashboard.html"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        return [TextContent(type="text", text=json.dumps({
+            "project_id": project_id,
+            "file_path": str(out_path),
+            "file_size_bytes": out_path.stat().st_size,
+            "assumptions_rendered": total,
+            "rag_summary": {"RED": len(red), "AMBER": len(amber), "GREEN": len(green)},
+            "average_score": avg_score,
+            "overall_health": health,
+            "external_signals_included": len(external_signals),
+            "cascade_chains_included": len(cascades),
+            "note": "Single-file HTML with inline CSS and data. Open in any browser, no server required.",
+        }))]
+
+    except Exception as exc:
+        import traceback
+        return [TextContent(type="text", text=json.dumps({"error": str(exc), "traceback": traceback.format_exc()}))]
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -1564,6 +1999,7 @@ _DISPATCH = {
     "detect_external_drift": _detect_external_drift,
     "generate_assumption_report": _generate_assumption_report,
     "export_assumption_dashboard": _export_assumption_dashboard,
+    "export_assumption_html_dashboard": _export_assumption_html_dashboard,
     "export_assumption_graph": _export_assumption_graph,
 }
 

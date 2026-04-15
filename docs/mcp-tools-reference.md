@@ -77,7 +77,7 @@ Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) c
 | pm-simulation | 2 | Monte Carlo schedule simulation — P50/P80/P90 delivery dates |
 | pm-lessons | 5 | AI lessons extraction from gate reviews/PIRs, systemic pattern analysis |
 | pm-reporting | 6 | Gate review summaries, SRO dashboards, board exception reports, PIR templates |
-| pm-assumptions | 7 | Assumption drift detection, confidence scoring, live external signals (ONS/World Bank), AI executive reports, cascade analysis, UDS dashboard, graph export |
+| pm-assumptions | 8 | Assumption drift detection, confidence scoring, live external signals (ONS/World Bank), AI executive reports, cascade analysis, UDS dashboard, graph export |
 | **Total** | **123** | One unified endpoint |
 
 ---

@@ -175,10 +175,10 @@ class TestToolAggregation:
     """Test that tool aggregation in the unified server is correct."""
 
     def test_total_tool_count(self):
-        """Unified server has exactly 123 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+7)."""
+        """Unified server has exactly 124 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+8)."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
-        assert len(ALL_TOOLS) == 123
+        assert len(ALL_TOOLS) == 124
 
     def test_no_duplicate_tool_names(self):
         """No two tools share the same name across modules."""
@@ -202,9 +202,11 @@ class TestToolAggregation:
         # First tool should be from pm-data
         assert names[0] == "load_project"
         # Last tool should be from pm-assumptions
-        assert names[-1] == "generate_assumption_report"
-        # export_assumption_graph should be second-to-last
-        assert names[-2] == "export_assumption_graph"
+        assert names[-1] == "export_assumption_html_dashboard"
+        # All pm-assumptions tools should be present
+        assert "export_assumption_html_dashboard" in names
+        assert "generate_assumption_report" in names
+        assert "export_assumption_graph" in names
 
     def test_all_tools_have_valid_schemas(self):
         """Every tool has a name, description, and inputSchema."""
@@ -447,6 +449,7 @@ class TestExpectedTools:
                 "detect_external_drift",
                 "generate_assumption_report",
                 "export_assumption_dashboard",
+                "export_assumption_html_dashboard",
                 "export_assumption_graph",
             }
         )
@@ -647,13 +650,14 @@ class TestAssumptionsModule:
         "detect_external_drift",
         "generate_assumption_report",
         "export_assumption_dashboard",
+        "export_assumption_html_dashboard",
         "export_assumption_graph",
     }
 
     def test_assumptions_registry_loads(self):
         from pm_mcp_servers.pm_assumptions.registry import TOOLS
 
-        assert len(TOOLS) == 7
+        assert len(TOOLS) == 8
 
     def test_assumptions_tool_names(self):
         from pm_mcp_servers.pm_assumptions.registry import TOOLS
@@ -710,3 +714,92 @@ class TestAssumptionsModule:
         assert "csv" in props["format"]["enum"]
         assert "json" in props["format"]["enum"]
         assert "all" in props["format"]["enum"]
+
+    def test_build_assumption_dashboard_panels_is_callable(self):
+        """The shared panel-builder helper should be importable and callable."""
+        from pm_mcp_servers.pm_assumptions.server import build_assumption_dashboard_panels
+
+        # For a non-existent project, should still return a well-formed dict
+        # (empty assumptions, zero counts). No exception.
+        result = build_assumption_dashboard_panels("NONEXISTENT-TEST-PROJECT")
+        assert isinstance(result, dict)
+        assert "project_id" in result
+        assert result["project_id"] == "NONEXISTENT-TEST-PROJECT"
+        assert "summary" in result
+        assert "total_assumptions" in result["summary"]
+        assert "rag_counts" in result["summary"]
+        assert result["summary"]["rag_counts"] == {"RED": 0, "AMBER": 0, "GREEN": 0}
+        assert "top5_lowest_confidence" in result
+        assert "external_signals" in result
+        assert "all_assumptions" in result
+
+
+class TestRemoteHttpEndpoints:
+    """Tests for the new HTTP endpoints on the remote SSE server.
+
+    These endpoints let a hosted UDS renderer load dashboard panel data
+    and YAML specs directly from the PDA Platform, eliminating the need
+    for a local filesystem or a separate data server.
+    """
+
+    def _client(self):
+        from starlette.testclient import TestClient
+        from pm_mcp_servers.pda_platform.remote import app
+        return TestClient(app)
+
+    def test_health_still_works(self):
+        """Sanity check — the existing /health endpoint is unaffected."""
+        client = self._client()
+        r = client.get("/health")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ok"
+        assert data["server"] == "pda-platform"
+
+    def test_dashboard_data_returns_json(self):
+        """GET /data/{project_id}/dashboard.json returns the panel data dict."""
+        client = self._client()
+        r = client.get("/data/TEST-NONEXISTENT/dashboard.json")
+        # Even for a project with no data, this should 200 with empty counts
+        assert r.status_code == 200
+        data = r.json()
+        assert data["project_id"] == "TEST-NONEXISTENT"
+        assert "summary" in data
+        assert "top5_lowest_confidence" in data
+        assert "external_signals" in data
+
+    def test_dashboard_spec_returns_yaml(self):
+        """GET /dashboards/assumption-drift.uds.yaml returns the YAML spec."""
+        client = self._client()
+        r = client.get("/dashboards/assumption-drift.uds.yaml")
+        assert r.status_code == 200
+        # Content-type should be YAML-ish
+        assert "yaml" in r.headers.get("content-type", "").lower()
+        # Body should contain known UDS spec fields
+        body = r.text
+        assert "uds:" in body
+        assert "assumption-drift" in body or "Assumption Drift" in body
+
+    def test_dashboard_spec_404_for_unknown(self):
+        """GET /dashboards/{unknown}.uds.yaml returns 404 with an error body."""
+        client = self._client()
+        r = client.get("/dashboards/does-not-exist.uds.yaml")
+        assert r.status_code == 404
+        assert "error" in r.json()
+
+    def test_dashboard_spec_rejects_path_traversal(self):
+        """Path-traversal attempts resolve to a safe no-match, not a file read."""
+        client = self._client()
+        r = client.get("/dashboards/..%2F..%2Fetc%2Fpasswd.uds.yaml")
+        # Should be 404 — the sanitiser strips `..` and `/` before lookup
+        assert r.status_code == 404
+
+    def test_cors_headers_present(self):
+        """CORS headers allow any origin (permissive for read-only public data)."""
+        client = self._client()
+        r = client.get(
+            "/data/TEST-NONEXISTENT/dashboard.json",
+            headers={"Origin": "https://any.netlify.app"},
+        )
+        assert r.status_code == 200
+        assert r.headers.get("access-control-allow-origin") == "*"

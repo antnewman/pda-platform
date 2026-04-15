@@ -9,6 +9,7 @@ from .server import (
     _DISPATCH,
     _export_assumption_dashboard,
     _export_assumption_graph,
+    _export_assumption_html_dashboard,
     _fetch_external_signal,
     _detect_external_drift,
     _generate_assumption_report,

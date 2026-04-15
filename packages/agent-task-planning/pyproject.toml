@@ -39,42 +39,42 @@ classifiers = [
 ]
 
 dependencies = [
-    "pydantic>=2.0.0",
-    "httpx>=0.25.0",
-    "structlog>=23.0.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "httpx>=0.25.0,<1.0.0",
+    "structlog>=23.0.0,<26.0.0",
 ]
 
 [project.optional-dependencies]
-anthropic = ["anthropic>=0.18.0"]
-openai = ["openai>=1.0.0"]
-google = ["google-generativeai>=0.3.0"]
-ollama = ["ollama>=0.1.0"]
+anthropic = ["anthropic>=0.18.0,<1.0.0"]
+openai = ["openai>=1.0.0,<3.0.0"]
+google = ["google-generativeai>=0.3.0,<1.0.0"]
+ollama = ["ollama>=0.1.0,<1.0.0"]
 confidence = []
 confidence-full = [
-    "numpy>=1.20.0",
-    "sentence-transformers>=2.0.0",
+    "numpy>=1.20.0,<3.0.0",
+    "sentence-transformers>=2.0.0,<4.0.0",
 ]
 mining = [
-    "numpy>=1.20.0",
-    "sentence-transformers>=2.0.0",
+    "numpy>=1.20.0,<3.0.0",
+    "sentence-transformers>=2.0.0,<4.0.0",
 ]
 mining-full = [
-    "numpy>=1.20.0",
-    "sentence-transformers>=2.0.0",
-    "umap-learn>=0.5.0",
-    "hdbscan>=0.8.0",
-    "scikit-learn>=1.0.0",
+    "numpy>=1.20.0,<3.0.0",
+    "sentence-transformers>=2.0.0,<4.0.0",
+    "umap-learn>=0.5.0,<1.0.0",
+    "hdbscan>=0.8.0,<1.0.0",
+    "scikit-learn>=1.0.0,<2.0.0",
 ]
 all = [
-    "anthropic>=0.18.0",
-    "openai>=1.0.0",
-    "google-generativeai>=0.3.0",
-    "ollama>=0.1.0",
-    "numpy>=1.20.0",
-    "sentence-transformers>=2.0.0",
-    "umap-learn>=0.5.0",
-    "hdbscan>=0.8.0",
-    "scikit-learn>=1.0.0",
+    "anthropic>=0.18.0,<1.0.0",
+    "openai>=1.0.0,<3.0.0",
+    "google-generativeai>=0.3.0,<1.0.0",
+    "ollama>=0.1.0,<1.0.0",
+    "numpy>=1.20.0,<3.0.0",
+    "sentence-transformers>=2.0.0,<4.0.0",
+    "umap-learn>=0.5.0,<1.0.0",
+    "hdbscan>=0.8.0,<1.0.0",
+    "scikit-learn>=1.0.0,<2.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
