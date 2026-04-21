@@ -93,6 +93,11 @@ class ForecastEngine:
             # Fallback to ensemble
             forecast = self._ensemble_forecast(project, tasks, status, baseline_finish, depth)
 
+        # Propagate caller's confidence_level onto the returned Forecast.
+        # Internal forecast methods hardcode 0.80; this line honours the
+        # confidence_level argument the caller passed to forecast().
+        forecast.confidence_level = confidence_level
+
         # Generate scenarios if requested
         if scenarios and method != ForecastMethod.ML_ENSEMBLE:
             forecast.scenarios = self._generate_scenarios(forecast.forecast_date, status)
