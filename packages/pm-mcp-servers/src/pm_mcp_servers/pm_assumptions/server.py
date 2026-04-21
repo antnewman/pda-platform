@@ -102,7 +102,11 @@ ASSUMPTIONS_TOOLS: list[Tool] = [
             "Fetch a live data point from a public data source and cache it in the store. "
             "Use this to validate assumptions against real-world conditions. "
             "Supported sources and indicators: "
-            "ons: cpi_inflation (UK CPI annual %), base_rate (Bank of England base rate %), "
+            "ons: cpi_inflation (UK CPI all-items annual %), "
+            "services_cpi_rate (UK CPI services annual %), "
+            "services_cpi_index (UK CPI services index, 2015=100), "
+            "all_items_cpi_index (UK CPI all-items index, 2015=100), "
+            "base_rate (Bank of England base rate %), "
             "construction_output (UK construction output index). "
             "world_bank: gdp_growth (GDP growth % for a country), "
             "digital_infrastructure (Digital Adoption Index 0-1), "
@@ -119,6 +123,9 @@ ASSUMPTIONS_TOOLS: list[Tool] = [
                     "type": "string",
                     "enum": [
                         "cpi_inflation",
+                        "services_cpi_rate",
+                        "services_cpi_index",
+                        "all_items_cpi_index",
                         "base_rate",
                         "construction_output",
                         "gdp_growth",
@@ -475,7 +482,25 @@ def _fetch_ons(indicator: str) -> dict:
             "dataset": "MM23",
             "timeseries": "D7G7",
             "unit": "% annual",
-            "description": "UK CPI annual inflation rate",
+            "description": "UK CPI all-items annual inflation rate",
+        },
+        "services_cpi_rate": {
+            "dataset": "MM23",
+            "timeseries": "D7NN",
+            "unit": "% annual",
+            "description": "UK CPI services annual inflation rate",
+        },
+        "services_cpi_index": {
+            "dataset": "MM23",
+            "timeseries": "D7F5",
+            "unit": "index (2015=100)",
+            "description": "UK CPI services index, 2015=100",
+        },
+        "all_items_cpi_index": {
+            "dataset": "MM23",
+            "timeseries": "D7BT",
+            "unit": "index (2015=100)",
+            "description": "UK CPI all-items index, 2015=100",
         },
         "base_rate": {
             "dataset": "IUDSOIA",
@@ -528,6 +553,9 @@ def _fetch_ons(indicator: str) -> dict:
         # Return a realistic fallback with clear labelling
         fallback = {
             "cpi_inflation": (3.2, "% annual", "2026-Q1"),
+            "services_cpi_rate": (4.3, "% annual", "2026-Q1"),
+            "services_cpi_index": (148.0, "index (2015=100)", "2026-Q1"),
+            "all_items_cpi_index": (137.0, "index (2015=100)", "2026-Q1"),
             "base_rate": (4.75, "% per annum", "2026-Q1"),
             "construction_output": (98.4, "index (2019=100)", "2026-Q1"),
         }
