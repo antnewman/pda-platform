@@ -29,11 +29,11 @@ class TestToolRegistration:
     """Tests for tool registration with server."""
 
     @pytest.mark.asyncio
-    async def test_list_tools_returns_six_tools(self):
-        """Test that server lists all 6 analysis tools."""
+    async def test_list_tools_returns_seven_tools(self):
+        """Test that server lists all 7 analysis tools."""
         from pm_mcp_servers.pm_analyse.server import list_tools
         tools = await list_tools()
-        assert len(tools) == 6
+        assert len(tools) == 7
 
     @pytest.mark.asyncio
     async def test_list_tools_includes_identify_risks(self):
