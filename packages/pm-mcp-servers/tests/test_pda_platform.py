@@ -803,3 +803,224 @@ class TestRemoteHttpEndpoints:
         )
         assert r.status_code == 200
         assert r.headers.get("access-control-allow-origin") == "*"
+
+
+class TestAssureDispatchWiring:
+    """Regression tests for tool-dispatch wiring in pm-assure.
+
+    These guard against bugs where a tool is registered in ASSURE_TOOLS but
+    omitted from the per-module _DISPATCH dict — meaning Claude can see the
+    tool but calling it returns "Unknown tool: <name>". scan_for_red_flags
+    is the README's headlined "Start here" call, so silent-fail is publicly
+    visible.
+    """
+
+    async def test_scan_for_red_flags_dispatches(self):
+        """scan_for_red_flags must route to its handler, not return 'Unknown tool'."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("scan_for_red_flags", {"project_id": "TEST-NONEXISTENT"})
+        text = result[0].text
+        assert "Unknown tool" not in text, (
+            f"scan_for_red_flags is registered but not wired to its handler: {text}"
+        )
+
+    async def test_every_assure_tool_has_dispatch_entry(self):
+        """No tool in ASSURE_TOOLS should be missing from _DISPATCH.
+
+        Catches the same class of bug for any future tool added to the module.
+        """
+        from pm_mcp_servers.pm_assure.registry import TOOLS as ASSURE_TOOLS, _DISPATCH
+
+        registered = {t.name for t in ASSURE_TOOLS}
+        wired = set(_DISPATCH.keys())
+        missing = registered - wired
+        assert not missing, (
+            f"Tools registered in ASSURE_TOOLS but missing from _DISPATCH: {missing}"
+        )
+
+
+class TestAssessGateReadinessErrors:
+    """Regression tests for clear, actionable errors from assess_gate_readiness.
+
+    The handler used to fail with the opaque string "Error: 'gate'" when
+    callers omitted required parameters — a wrapped KeyError. These tests
+    confirm we now return a structured JSON error that names the missing
+    parameter and shows the expected values.
+    """
+
+    async def test_missing_gate_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("assess_gate_readiness", {"project_id": "TEST-X"})
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "missing" in body["error"].lower()
+        assert "GATE_3" in _json.dumps(body)
+
+    async def test_missing_project_id_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("assess_gate_readiness", {"gate": "GATE_3"})
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "missing" in body["error"].lower()
+        assert "project_id" in body["error"]
+
+    async def test_invalid_gate_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "assess_gate_readiness",
+            {"project_id": "TEST-X", "gate": "GATE_99"},
+        )
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "GATE_99" in body["error"] or "Invalid" in body["error"]
+        assert "expected" in body
+class TestReferenceClassInputValidation:
+    """Regression tests for run_reference_class_check input validation.
+
+    Without validation, passing estimate_type='cost' (a common LLM-style
+    abbreviation) returned the misleading error "No benchmark data for
+    IT_AND_DIGITAL/cost" — sounded like missing data, was actually invalid
+    input. Now: aliases are resolved silently, unknown values produce
+    structured errors naming valid options.
+    """
+
+    async def test_canonical_cost_overrun_still_works(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "cost_overrun",
+            "submitted_value": 42,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" not in body, f"Unexpected error: {body}"
+        # Should have benchmark output fields
+        assert "approximate_percentile" in body or "interpretation" in body or "mean" in _json.dumps(body).lower()
+
+    async def test_alias_cost_resolves_to_cost_overrun(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "cost",
+            "submitted_value": 42,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" not in body, f"Alias 'cost' should resolve to 'cost_overrun': {body}"
+
+    async def test_alias_schedule_resolves_to_schedule_slip(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "schedule",
+            "submitted_value": 12,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" not in body, f"Alias 'schedule' should resolve to 'schedule_slip': {body}"
+
+    async def test_invalid_estimate_type_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "banana",
+            "submitted_value": 42,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "banana" in body["error"]
+        assert "expected" in body
+        assert "cost_overrun" in body["expected"]
+        assert "accepted_aliases" in body
+class TestBoardReportFallback:
+    """Regression tests for graceful fallback when ANTHROPIC_API_KEY is unset.
+
+    Previously generate_board_exception_report failed hard with a JSON
+    error if the key was missing. Now it produces a deterministic,
+    evidence-only markdown board report from the same underlying project
+    data — always usable, always honest about which mode it ran in.
+    """
+
+    def _seed_minimal_project(self, project_id: str = "BOARD-FALLBACK-TEST"):
+        """Seed enough project data that _has_any_data() returns True."""
+        from datetime import datetime
+        from pm_data_tools.db.store import AssuranceStore
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk({
+            "id": f"{project_id}-R001",
+            "project_id": project_id,
+            "title": "Test risk for fallback report",
+            "description": "Seeded for testing the evidence-only fallback path.",
+            "category": "DELIVERY",
+            "likelihood": 4,
+            "impact": 4,
+            "risk_score": 16,
+            "status": "OPEN",
+            "created_at": now,
+            "updated_at": now,
+        })
+        return project_id
+
+    async def test_evidence_only_when_api_key_missing(self, monkeypatch):
+        """Without ANTHROPIC_API_KEY: returns markdown evidence-only report, not an error."""
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-FALLBACK-NOKEY")
+        result = await call_tool("generate_board_exception_report", {"project_id": project_id})
+
+        text = result[0].text
+        # Must not be a JSON error
+        try:
+            body = _json.loads(text)
+            assert "error" not in body, f"Expected fallback markdown, got error: {body}"
+        except _json.JSONDecodeError:
+            pass  # Plain markdown — what the fallback produces
+
+        assert "AI synthesis unavailable" in text
+        assert "Board Exception Report" in text
+        assert project_id in text
+        assert "evidence-only" in text.lower()
+
+    async def test_no_data_still_errors_clearly(self, monkeypatch):
+        """If the project has no data at all, return a clear 'no data' error."""
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        result = await call_tool("generate_board_exception_report", {
+            "project_id": "DOES-NOT-EXIST-AT-ALL",
+        })
+
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "No data found" in body["error"]
+
+    async def test_fallback_includes_high_risks(self, monkeypatch):
+        """The evidence-only fallback should surface seeded HIGH/CRITICAL risks."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-FALLBACK-RISKS")
+        result = await call_tool("generate_board_exception_report", {"project_id": project_id})
+
+        text = result[0].text
+        assert "High and Critical Risks" in text
+        assert (
+            "Test risk for fallback report" in text
+            or f"{project_id}-R001" in text
+        )

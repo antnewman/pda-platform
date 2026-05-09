@@ -48,12 +48,25 @@ class TestOutlierDetector:
 
     def test_detect_duration_outliers_long_task(self, long_duration_task):
         """Test detection of tasks with unusually long duration."""
-        project = MockProject(tasks=[long_duration_task])
+        # OutlierDetector._detect_duration_outliers requires at least three
+        # tasks to build a statistical baseline. Pad with two short tasks
+        # so the long task can be compared against the sample.
+        short_a = MockTask(
+            id='short-a', name='Short A',
+            start_date=date.today(),
+            finish_date=date.today() + timedelta(days=5),
+        )
+        short_b = MockTask(
+            id='short-b', name='Short B',
+            start_date=date.today(),
+            finish_date=date.today() + timedelta(days=7),
+        )
+        project = MockProject(tasks=[long_duration_task, short_a, short_b])
         detector = OutlierDetector()
         outliers = detector.detect(project, focus_areas=["duration"])
         # Long task (200 days) should exceed max threshold
         assert len(outliers) > 0
-        assert any(o.field == "duration" for o in outliers)
+        assert any(o.field_name == "duration" for o in outliers)
 
     def test_detect_progress_outliers_stuck_task(self, stuck_task):
         """Test detection of stuck tasks."""
@@ -62,7 +75,7 @@ class TestOutlierDetector:
         outliers = detector.detect(project, focus_areas=["progress"])
         # Stuck task should be detected
         assert len(outliers) > 0
-        assert any(o.field == "percent_complete" for o in outliers)
+        assert any(o.field_name == "percent_complete" for o in outliers)
 
     def test_detect_float_outliers_negative_float(self):
         """Test detection of negative float (critical)."""
@@ -76,7 +89,7 @@ class TestOutlierDetector:
         detector = OutlierDetector()
         outliers = detector.detect(project, focus_areas=["float"])
         assert len(outliers) > 0
-        critical_float = [o for o in outliers if o.field == "total_float" and o.severity == Severity.CRITICAL]
+        critical_float = [o for o in outliers if o.field_name == "total_float" and o.severity == Severity.CRITICAL]
         assert len(critical_float) > 0
 
     def test_detect_float_outliers_excessive(self):
@@ -90,7 +103,7 @@ class TestOutlierDetector:
         project = MockProject(tasks=[task])
         detector = OutlierDetector()
         outliers = detector.detect(project, focus_areas=["float"])
-        assert any(o.field == "total_float" for o in outliers)
+        assert any(o.field_name == "total_float" for o in outliers)
 
     def test_detect_date_outliers_invalid_dates(self):
         """Test detection of impossible dates (finish before start)."""
@@ -104,7 +117,7 @@ class TestOutlierDetector:
         detector = OutlierDetector()
         outliers = detector.detect(project, focus_areas=["dates"])
         assert len(outliers) > 0
-        assert any(o.field == "dates" and o.severity == Severity.CRITICAL for o in outliers)
+        assert any(o.field_name == "dates" and o.severity == Severity.CRITICAL for o in outliers)
 
     def test_detect_date_outliers_overdue_incomplete(self):
         """Test detection of overdue incomplete tasks."""
@@ -136,7 +149,7 @@ class TestOutlierDetector:
         """Test detection focusing on single area."""
         detector = OutlierDetector()
         outliers = detector.detect(complex_project, focus_areas=["duration"])
-        assert all(o.field in ["duration"] for o in outliers)
+        assert all(o.field_name in ["duration"] for o in outliers)
 
     def test_detect_focus_multiple_areas(self, complex_project):
         """Test detection focusing on multiple areas."""
@@ -146,7 +159,7 @@ class TestOutlierDetector:
             focus_areas=["duration", "progress"]
         )
         for outlier in outliers:
-            assert outlier.field in ["duration", "percent_complete"]
+            assert outlier.field_name in ["duration", "percent_complete"]
 
     def test_detect_summary_tasks_excluded(self):
         """Test that summary tasks are excluded from detection."""
@@ -390,7 +403,7 @@ class TestBaselineComparator:
         comparator = BaselineComparator()
         variances = comparator.compare(project)
         assert len(variances) > 0
-        assert any(v.field == "finish_date" for v in variances)
+        assert any(v.field_name == "finish_date" for v in variances)
 
     def test_compare_variance_attributes(self, task_with_baseline):
         """Test variance has all required attributes."""
@@ -399,7 +412,7 @@ class TestBaselineComparator:
         variances = comparator.compare(project)
         assert all(v.task_id for v in variances)
         assert all(v.task_name for v in variances)
-        assert all(v.field for v in variances)
+        assert all(v.field_name for v in variances)
         assert all(v.severity in [
             Severity.CRITICAL,
             Severity.HIGH,

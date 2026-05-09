@@ -4,7 +4,7 @@ Tests for PM-Analyse data models.
 Tests all data model classes, validation, and to_dict() serialization.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -228,7 +228,7 @@ class TestOutlier:
             id="out-1",
             task_id="task-1",
             task_name="Task",
-            field="duration",
+            field_name="duration",
             value=100,
             expected_range=(10, 30),
             deviation_score=5.2,
@@ -236,14 +236,14 @@ class TestOutlier:
             confidence=0.85,
             explanation="Duration too long"
         )
-        assert outlier.field == "duration"
+        assert outlier.field_name == "duration"
         assert outlier.deviation_score == 5.2
 
     def test_outlier_validation_confidence(self):
         """Test confidence validation."""
         with pytest.raises(ValueError, match="Confidence must be between 0.0 and 1.0"):
             Outlier(
-                id="o", task_id="t", task_name="T", field="f", value=1,
+                id="o", task_id="t", task_name="T", field_name="f", value=1,
                 expected_range=(0, 10), deviation_score=1.0,
                 severity=Severity.LOW, confidence=1.5, explanation="x"
             )
@@ -254,7 +254,7 @@ class TestOutlier:
             id="out-1",
             task_id="t1",
             task_name="Task",
-            field="progress",
+            field_name="progress",
             value=0,
             expected_range=(10, 90),
             deviation_score=2.5,
@@ -460,7 +460,7 @@ class TestBaselineVariance:
         var = BaselineVariance(
             task_id="task-1",
             task_name="Task",
-            field="finish_date",
+            field_name="finish_date",
             baseline_value=date.today(),
             current_value=date.today() + timedelta(days=10),
             variance=10.0,
@@ -476,7 +476,7 @@ class TestBaselineVariance:
         var = BaselineVariance(
             task_id="t1",
             task_name="Task",
-            field="duration",
+            field_name="duration",
             baseline_value=10,
             current_value=15,
             variance=5.0,
@@ -497,7 +497,7 @@ class TestAnalysisMetadata:
         meta = AnalysisMetadata(
             analysis_id="analysis-1",
             analysis_type="risk_identification",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             depth=AnalysisDepth.STANDARD,
             tasks_analyzed=50,
             overall_confidence=0.85
@@ -511,7 +511,7 @@ class TestAnalysisMetadata:
             AnalysisMetadata(
                 analysis_id="a1",
                 analysis_type="test",
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
                 overall_confidence=1.5
             )
 
@@ -520,7 +520,7 @@ class TestAnalysisMetadata:
         meta = AnalysisMetadata(
             analysis_id="a1",
             analysis_type="test",
-            started_at=datetime.utcnow()
+            started_at=datetime.now(timezone.utc)
         )
         assert meta.completed_at is None
         assert meta.duration_ms is None
@@ -535,7 +535,7 @@ class TestAnalysisMetadata:
         meta = AnalysisMetadata(
             analysis_id="a1",
             analysis_type="forecast",
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
             depth=AnalysisDepth.DEEP,
             tasks_analyzed=100,
             overall_confidence=0.9

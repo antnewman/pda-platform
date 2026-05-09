@@ -298,6 +298,153 @@ def _has_any_data(project_data: dict[str, Any]) -> bool:
     return False
 
 
+def _compose_evidence_only_board_report(
+    project_id: str,
+    reporting_period: str,
+    project_data: dict[str, Any],
+) -> str:
+    """Compose a deterministic Board Exception Report from raw project data.
+
+    Used as a graceful fallback when ANTHROPIC_API_KEY is not set or when
+    the Claude API call fails. The report is less polished than an AI-
+    synthesised narrative but contains the same underlying evidence: HIGH
+    and CRITICAL risks, the most recent gate readiness assessment,
+    financial variance, material change requests, and the most recent
+    ARMM assessment. Clearly labelled so readers know the AI synthesis
+    layer was bypassed.
+
+    Mirrors the graceful-fallback pattern used in pm_assumptions for
+    external signal fetches: same response shape, clearly-labelled
+    fallback, includes the reason in the output.
+    """
+    today = date.today().isoformat()
+    lines: list[str] = []
+    lines.append(f"# Board Exception Report — {project_id}")
+    lines.append(f"**Reporting Period:** {reporting_period}  **Date:** {today}")
+    lines.append("")
+    lines.append("> **Note: AI synthesis unavailable.** This report contains raw evidence only — "
+                 "no narrative summarisation has been performed. Review with care; figures should "
+                 "be verified against the latest project data before submission.")
+    lines.append("")
+
+    # ── HIGH and CRITICAL risks ─────────────────────────────────────────
+    # The risks table stores risk_score (likelihood × impact, 1–25). HIGH
+    # threshold is conventionally ≥15; some callers also stamp an explicit
+    # severity field. Check both.
+    risks = project_data.get("risks") or []
+    high_critical = []
+    if isinstance(risks, list):
+        for r in risks:
+            score = r.get("risk_score") or r.get("score") or r.get("residual_score") or 0
+            severity = (r.get("severity") or "").upper()
+            if severity in ("HIGH", "CRITICAL") or (isinstance(score, (int, float)) and score >= 15):
+                high_critical.append(r)
+
+    lines.append("## High and Critical Risks")
+    if high_critical:
+        lines.append("")
+        lines.append("| Risk ID | Title | Score | Status |")
+        lines.append("|---------|-------|-------|--------|")
+        for r in high_critical[:10]:
+            rid = r.get("id") or r.get("risk_id") or "—"
+            title = (r.get("title") or r.get("description") or "—")[:80].replace("|", "/")
+            score = r.get("risk_score") or r.get("score") or r.get("residual_score") or "—"
+            status = r.get("status") or "—"
+            lines.append(f"| {rid} | {title} | {score} | {status} |")
+    else:
+        lines.append("")
+        lines.append("No HIGH or CRITICAL risks recorded.")
+    lines.append("")
+
+    # ── Most recent gate readiness ──────────────────────────────────────
+    lines.append("## Gate Readiness")
+    gate_readiness = project_data.get("gate_readiness") or []
+    if isinstance(gate_readiness, list) and gate_readiness:
+        latest = gate_readiness[-1]
+        gate = latest.get("gate", "—")
+        readiness = latest.get("readiness", "—")
+        score = latest.get("composite_score", "—")
+        assessed_at = latest.get("assessed_at") or latest.get("created_at") or "—"
+        lines.append("")
+        lines.append(f"- **Gate:** {gate}")
+        lines.append(f"- **Readiness:** {readiness}")
+        lines.append(f"- **Composite score:** {score}")
+        lines.append(f"- **Assessed:** {assessed_at}")
+    else:
+        lines.append("")
+        lines.append("No gate readiness assessments recorded.")
+    lines.append("")
+
+    # ── Financial variance ──────────────────────────────────────────────
+    lines.append("## Financial Position")
+    baselines = project_data.get("financial_baselines") or []
+    actuals = project_data.get("financial_actuals") or []
+    forecasts = project_data.get("financial_forecasts") or []
+    if isinstance(baselines, list) and baselines:
+        bl = baselines[-1]
+        baseline_cost = bl.get("baseline_cost") or bl.get("budget_at_completion") or "—"
+        lines.append("")
+        lines.append(f"- **Baseline cost (BAC):** {baseline_cost}")
+    if isinstance(actuals, list) and actuals:
+        latest_actual = actuals[-1]
+        ac = latest_actual.get("actual_cost") or latest_actual.get("ac") or "—"
+        lines.append(f"- **Actual cost to date:** {ac}")
+    if isinstance(forecasts, list) and forecasts:
+        latest_fc = forecasts[-1]
+        eac = latest_fc.get("eac") or latest_fc.get("estimate_at_completion") or "—"
+        lines.append(f"- **Estimate at completion (EAC):** {eac}")
+    if not (baselines or actuals or forecasts):
+        lines.append("")
+        lines.append("No financial data recorded.")
+    lines.append("")
+
+    # ── Material change requests (status not Closed) ────────────────────
+    lines.append("## Open Change Requests")
+    changes = project_data.get("change_requests") or []
+    open_changes = []
+    if isinstance(changes, list):
+        open_changes = [c for c in changes if (c.get("status") or "").upper() not in ("CLOSED", "REJECTED", "WITHDRAWN")]
+    if open_changes:
+        lines.append("")
+        lines.append("| Change ID | Title | Status | Cost Impact |")
+        lines.append("|-----------|-------|--------|-------------|")
+        for c in open_changes[:10]:
+            cid = c.get("id") or c.get("change_id") or "—"
+            title = (c.get("title") or c.get("description") or "—")[:80].replace("|", "/")
+            status = c.get("status") or "—"
+            cost = c.get("cost_impact") or c.get("approved_cost_impact") or "—"
+            lines.append(f"| {cid} | {title} | {status} | {cost} |")
+    else:
+        lines.append("")
+        lines.append("No open change requests.")
+    lines.append("")
+
+    # ── Most recent ARMM assessment ─────────────────────────────────────
+    lines.append("## ARMM Assessment")
+    armm = project_data.get("armm_assessments") or []
+    if isinstance(armm, list) and armm:
+        latest_armm = armm[-1]
+        rating = latest_armm.get("overall_rating") or latest_armm.get("rating") or "—"
+        assessed_at = latest_armm.get("assessed_at") or latest_armm.get("created_at") or "—"
+        lines.append("")
+        lines.append(f"- **Overall rating:** {rating}")
+        lines.append(f"- **Assessed:** {assessed_at}")
+    else:
+        lines.append("")
+        lines.append("No ARMM assessments recorded.")
+    lines.append("")
+
+    # ── Footer ──────────────────────────────────────────────────────────
+    lines.append("---")
+    lines.append(
+        "*This report was generated in evidence-only mode by the PDA Platform. "
+        "To get an AI-synthesised board narrative, set `ANTHROPIC_API_KEY` in the "
+        "server environment and call `generate_board_exception_report` again.*"
+    )
+
+    return "\n".join(lines)
+
+
 def _get_anthropic_client():
     """Return an Anthropic client or None if key not set."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -555,13 +702,8 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
     project_id: str = arguments["project_id"]
     reporting_period: str = arguments.get("reporting_period") or date.today().strftime("%B %Y")
 
-    client = _get_anthropic_client()
-    if client is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "ANTHROPIC_API_KEY environment variable is not set. "
-                     "This tool requires the Anthropic API to generate the board exception report."
-        }))]
-
+    # Gather data first — needed for both the AI-synthesised path and the
+    # evidence-only fallback. If there's no data at all, fail fast either way.
     project_data = _gather_project_data(project_id)
 
     if not _has_any_data(project_data):
@@ -569,6 +711,17 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
             "error": f"No data found for project '{project_id}'. "
                      "Load project data using pm-data, pm-risk, pm-brm, and pm-financial tools first."
         }))]
+
+    # If the API key is missing, return a deterministic evidence-only board
+    # report rather than failing. Same graceful-fallback pattern as
+    # pm_assumptions/_fetch_ons uses for failed external API calls: same
+    # output shape, clearly-labelled fallback, includes the reason.
+    client = _get_anthropic_client()
+    if client is None:
+        document = _compose_evidence_only_board_report(
+            project_id, reporting_period, project_data
+        )
+        return [TextContent(type="text", text=document)]
 
     today = date.today().isoformat()
     data_summary = json.dumps(project_data, indent=2, default=str)
@@ -612,8 +765,12 @@ Rules:
 
     try:
         document = _call_claude(client, prompt, max_tokens=2000)
-    except Exception as exc:
-        return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
+    except Exception:
+        # Claude call failed mid-flight — fall back to evidence-only rather
+        # than returning an error. The board still gets a usable report.
+        document = _compose_evidence_only_board_report(
+            project_id, reporting_period, project_data
+        )
 
     return [TextContent(type="text", text=document)]
 
