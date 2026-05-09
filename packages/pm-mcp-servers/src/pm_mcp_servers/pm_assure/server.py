@@ -2885,6 +2885,22 @@ def main() -> None:
 
 async def _assess_gate_readiness(arguments: dict[str, Any]) -> list[TextContent]:
     """Run a full gate readiness assessment."""
+    # Validate required parameters BEFORE the broad try-block, so we can
+    # surface a clear, actionable error rather than the bare KeyError that
+    # would otherwise be wrapped as the opaque string "Error: 'gate'".
+    if "project_id" not in arguments:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Required parameter 'project_id' missing.",
+            "expected": "Stable identifier for the project, e.g. 'PROJ-001'.",
+            "example_call": {"project_id": "PROJ-001", "gate": "GATE_3"},
+        }))]
+    if "gate" not in arguments:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Required parameter 'gate' missing.",
+            "expected": "One of: GATE_0, GATE_1, GATE_2, GATE_3, GATE_4, GATE_5",
+            "example_call": {"project_id": arguments.get("project_id", "PROJ-001"), "gate": "GATE_3"},
+        }))]
+
     try:
         from pm_data_tools.assurance.gate_readiness import (
             GateReadinessAssessor,
@@ -2897,7 +2913,13 @@ async def _assess_gate_readiness(arguments: dict[str, Any]) -> list[TextContent]
         store = AssuranceStore(db_path=db_path)
         assessor = GateReadinessAssessor(store=store)
 
-        gate = GateType(arguments["gate"])
+        try:
+            gate = GateType(arguments["gate"])
+        except ValueError:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Invalid gate value: {arguments['gate']!r}",
+                "expected": ["GATE_0", "GATE_1", "GATE_2", "GATE_3", "GATE_4", "GATE_5"],
+            }))]
         result = assessor.assess(arguments["project_id"], gate)
 
         output = {
