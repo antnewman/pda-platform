@@ -944,3 +944,83 @@ class TestReferenceClassInputValidation:
         assert "expected" in body
         assert "cost_overrun" in body["expected"]
         assert "accepted_aliases" in body
+class TestBoardReportFallback:
+    """Regression tests for graceful fallback when ANTHROPIC_API_KEY is unset.
+
+    Previously generate_board_exception_report failed hard with a JSON
+    error if the key was missing. Now it produces a deterministic,
+    evidence-only markdown board report from the same underlying project
+    data — always usable, always honest about which mode it ran in.
+    """
+
+    def _seed_minimal_project(self, project_id: str = "BOARD-FALLBACK-TEST"):
+        """Seed enough project data that _has_any_data() returns True."""
+        from datetime import datetime
+        from pm_data_tools.db.store import AssuranceStore
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk({
+            "id": f"{project_id}-R001",
+            "project_id": project_id,
+            "title": "Test risk for fallback report",
+            "description": "Seeded for testing the evidence-only fallback path.",
+            "category": "DELIVERY",
+            "likelihood": 4,
+            "impact": 4,
+            "risk_score": 16,
+            "status": "OPEN",
+            "created_at": now,
+            "updated_at": now,
+        })
+        return project_id
+
+    async def test_evidence_only_when_api_key_missing(self, monkeypatch):
+        """Without ANTHROPIC_API_KEY: returns markdown evidence-only report, not an error."""
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-FALLBACK-NOKEY")
+        result = await call_tool("generate_board_exception_report", {"project_id": project_id})
+
+        text = result[0].text
+        # Must not be a JSON error
+        try:
+            body = _json.loads(text)
+            assert "error" not in body, f"Expected fallback markdown, got error: {body}"
+        except _json.JSONDecodeError:
+            pass  # Plain markdown — what the fallback produces
+
+        assert "AI synthesis unavailable" in text
+        assert "Board Exception Report" in text
+        assert project_id in text
+        assert "evidence-only" in text.lower()
+
+    async def test_no_data_still_errors_clearly(self, monkeypatch):
+        """If the project has no data at all, return a clear 'no data' error."""
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        result = await call_tool("generate_board_exception_report", {
+            "project_id": "DOES-NOT-EXIST-AT-ALL",
+        })
+
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "No data found" in body["error"]
+
+    async def test_fallback_includes_high_risks(self, monkeypatch):
+        """The evidence-only fallback should surface seeded HIGH/CRITICAL risks."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-FALLBACK-RISKS")
+        result = await call_tool("generate_board_exception_report", {"project_id": project_id})
+
+        text = result[0].text
+        assert "High and Critical Risks" in text
+        assert (
+            "Test risk for fallback report" in text
+            or f"{project_id}-R001" in text
+        )
