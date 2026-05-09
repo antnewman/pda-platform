@@ -803,3 +803,38 @@ class TestRemoteHttpEndpoints:
         )
         assert r.status_code == 200
         assert r.headers.get("access-control-allow-origin") == "*"
+
+
+class TestAssureDispatchWiring:
+    """Regression tests for tool-dispatch wiring in pm-assure.
+
+    These guard against bugs where a tool is registered in ASSURE_TOOLS but
+    omitted from the per-module _DISPATCH dict — meaning Claude can see the
+    tool but calling it returns "Unknown tool: <name>". scan_for_red_flags
+    is the README's headlined "Start here" call, so silent-fail is publicly
+    visible.
+    """
+
+    async def test_scan_for_red_flags_dispatches(self):
+        """scan_for_red_flags must route to its handler, not return 'Unknown tool'."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("scan_for_red_flags", {"project_id": "TEST-NONEXISTENT"})
+        text = result[0].text
+        assert "Unknown tool" not in text, (
+            f"scan_for_red_flags is registered but not wired to its handler: {text}"
+        )
+
+    async def test_every_assure_tool_has_dispatch_entry(self):
+        """No tool in ASSURE_TOOLS should be missing from _DISPATCH.
+
+        Catches the same class of bug for any future tool added to the module.
+        """
+        from pm_mcp_servers.pm_assure.registry import TOOLS as ASSURE_TOOLS, _DISPATCH
+
+        registered = {t.name for t in ASSURE_TOOLS}
+        wired = set(_DISPATCH.keys())
+        missing = registered - wired
+        assert not missing, (
+            f"Tools registered in ASSURE_TOOLS but missing from _DISPATCH: {missing}"
+        )
