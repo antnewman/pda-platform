@@ -12,13 +12,26 @@
 
 ---
 
-PDA Platform gives Claude and other MCP-compatible AI assistants **122 structured tools** to perform rigorous, evidence-based project delivery assurance aligned to IPA Gate Reviews (Gates 0–5), HM Treasury Green Book appraisal, and GMPP reporting standards. It is the only open-source MCP platform specifically designed for Senior Responsible Owners, Project Managers, Independent Assurance Reviewers, and Portfolio Managers working in UK government major project delivery.
+PDA Platform gives Claude and other MCP-compatible AI assistants **124 structured tools** to perform rigorous, evidence-based project delivery assurance aligned to IPA Gate Reviews (Gates 0–5), HM Treasury Green Book appraisal, and GMPP reporting standards. It is the only open-source MCP platform specifically designed for Senior Responsible Owners, Project Managers, Independent Assurance Reviewers, and Portfolio Managers working in UK government major project delivery.
 
 Think of it as a **semantic layer for project data**: it ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through a structured API that AI can reason about directly — without parsing raw XML or making things up.
 
 Connect Claude to the platform and ask it to conduct a full gate readiness assessment, scan across all delivery dimensions simultaneously for critical red flags, benchmark cost estimates against real IPA historical data, run Monte Carlo simulations, detect narrative optimism bias, or produce board-ready exception reports — all grounded in your project data, IPA methodology, and evidence from comparable government programmes.
 
 **Live demo:** `https://pda-platform-i33p.onrender.com/sse` — connect any MCP client in under 60 seconds, no installation required.
+
+---
+
+## What it does, in 90 seconds
+
+<!-- LOOM_EMBED_PLACEHOLDER -->
+*A 90-second walkthrough of the platform on a real assumption register lives here. (Loom link to be added.)*
+
+In the video you'll see the platform:
+
+- **Generate the questions a senior gate reviewer would ask** — from your project data, with no setup
+- **Score and validate every assumption in your business case** against live external signals from ONS and the World Bank
+- **Produce a board-ready exception report** grounded in evidence rather than narrative
 
 ---
 
@@ -67,9 +80,23 @@ See the full **[Connection Guide](docs/connection-guide.md)** for Claude.ai, Cla
 
 ---
 
-## Start here: scan for red flags
+## Start here: two ways in, no setup needed for the first
 
-The fastest way to get value from the platform is a single tool call:
+**Try this first** — works against zero project data, returns immediately:
+
+```
+generate_premortem_questions
+```
+
+Returns the questions an experienced IPA reviewer would actually ask at a gate review:
+
+> *"What is the programme team not telling senior stakeholders — and why?"*
+> *"Which assumption, if wrong, would most severely undermine the current delivery confidence rating?"*
+> *"Is the risk register a genuine picture of what could go wrong — or a curated list of manageable risks?"*
+
+Tailor the output to a specific gate stage (`gate_stage: 3`) or risk profile to focus the questions further.
+
+**Once you've loaded a project**, the next call is:
 
 ```
 scan_for_red_flags — project_id: "PROJ-001"
@@ -120,7 +147,17 @@ Once connected, Claude can answer questions like:
 
 ---
 
-## 17 MCP Modules
+## Built on PDA Platform
+
+Products built on the PDA Platform engine:
+
+- **[Evidence Engine](https://evidence-engine.netlify.app)** — a forecast-driven early-warning system for project assumption drift. Built by Laura White as the MPA Challenge 5 hackathon entry. Wraps PDA Platform with a forecasting layer, cascade propagation across the assumption dependency graph, and a confidence decomposition that turns assurance evidence into a live early-warning signal. Calls `generate_narrative` over MCP SSE; falls back gracefully if the engine is unreachable.
+
+If you've built something on PDA Platform, open an issue or PR — we'll add it here.
+
+---
+
+## 18 MCP Modules
 
 | Module | Tools | What it does |
 |--------|------:|-------------|
@@ -142,7 +179,7 @@ Once connected, Claude can answer questions like:
 | pm-lessons | 5 | AI extraction of lessons from gate reviews/PIRs, cross-project keyword search, systemic pattern analysis |
 | pm-reporting | 6 | IPA-format gate review summaries, SRO dashboards, board exception reports, portfolio summaries, PIR templates, UDS export |
 | pm-assumptions | 8 | Assumption drift detection, confidence scoring, live external signal integration (ONS, World Bank), AI executive reports, cascade analysis, UDS dashboard |
-| **Total** | **122** | One unified endpoint · One connection |
+| **Total** | **124** | One unified endpoint · One connection |
 
 ---
 

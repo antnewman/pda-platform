@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-16/server.schema.json",
   "name": "io.github.antnewman/pda-platform",
   "title": "PDA Platform",
-  "description": "122 MCP tools for UK government IPA Gate Review assurance: risk, benefits, Monte Carlo simulation, assumption drift detection, narrative divergence, EV, gate readiness, and portfolio analysis.",
+  "description": "124 MCP tools for UK government IPA Gate Review assurance: risk, benefits, Monte Carlo simulation, assumption drift detection, narrative divergence, EV, gate readiness, and portfolio analysis.",
   "version": "1.0.0",
   "status": "active",
   "websiteUrl": "https://github.com/antnewman/pda-platform",
