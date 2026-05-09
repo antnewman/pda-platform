@@ -365,10 +365,31 @@ async def _search_knowledge_base(arguments: dict[str, Any]) -> list[TextContent]
     return [TextContent(type="text", text=json.dumps({"query": arguments["query"], "category": category, "count": len(results), "results": results}, indent=2))]
 
 
+_REFERENCE_CLASS_VALID_ESTIMATES = ("cost_overrun", "schedule_slip")
+# Forgive common LLM-style abbreviations. The schema enum only lists the
+# canonical keys, but a caller passing 'cost' clearly means 'cost_overrun'
+# and silently failing with "No benchmark data" buries the user error.
+_REFERENCE_CLASS_ALIASES = {
+    "cost": "cost_overrun",
+    "schedule": "schedule_slip",
+}
+
+
 async def _run_reference_class_check(arguments: dict[str, Any]) -> list[TextContent]:
     project_type = arguments["project_type"]
     estimate_type = arguments["estimate_type"]
     submitted_value = arguments["submitted_value"]
+
+    # Resolve aliases (e.g. cost → cost_overrun) so the tool is forgiving
+    # of common LLM inputs without weakening the canonical schema.
+    estimate_type = _REFERENCE_CLASS_ALIASES.get(estimate_type, estimate_type)
+
+    if estimate_type not in _REFERENCE_CLASS_VALID_ESTIMATES:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Invalid estimate_type: {arguments['estimate_type']!r}",
+            "expected": list(_REFERENCE_CLASS_VALID_ESTIMATES),
+            "accepted_aliases": list(_REFERENCE_CLASS_ALIASES.keys()),
+        }))]
 
     data = BENCHMARK_DATA.get(project_type, {}).get(estimate_type)
     if not data:

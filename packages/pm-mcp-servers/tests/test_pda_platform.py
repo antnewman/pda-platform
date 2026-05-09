@@ -881,3 +881,66 @@ class TestAssessGateReadinessErrors:
         assert "error" in body
         assert "GATE_99" in body["error"] or "Invalid" in body["error"]
         assert "expected" in body
+class TestReferenceClassInputValidation:
+    """Regression tests for run_reference_class_check input validation.
+
+    Without validation, passing estimate_type='cost' (a common LLM-style
+    abbreviation) returned the misleading error "No benchmark data for
+    IT_AND_DIGITAL/cost" — sounded like missing data, was actually invalid
+    input. Now: aliases are resolved silently, unknown values produce
+    structured errors naming valid options.
+    """
+
+    async def test_canonical_cost_overrun_still_works(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "cost_overrun",
+            "submitted_value": 42,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" not in body, f"Unexpected error: {body}"
+        # Should have benchmark output fields
+        assert "approximate_percentile" in body or "interpretation" in body or "mean" in _json.dumps(body).lower()
+
+    async def test_alias_cost_resolves_to_cost_overrun(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "cost",
+            "submitted_value": 42,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" not in body, f"Alias 'cost' should resolve to 'cost_overrun': {body}"
+
+    async def test_alias_schedule_resolves_to_schedule_slip(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "schedule",
+            "submitted_value": 12,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" not in body, f"Alias 'schedule' should resolve to 'schedule_slip': {body}"
+
+    async def test_invalid_estimate_type_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("run_reference_class_check", {
+            "project_type": "IT_AND_DIGITAL",
+            "estimate_type": "banana",
+            "submitted_value": 42,
+        })
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "banana" in body["error"]
+        assert "expected" in body
+        assert "cost_overrun" in body["expected"]
+        assert "accepted_aliases" in body
