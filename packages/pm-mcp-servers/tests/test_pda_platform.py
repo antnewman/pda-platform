@@ -838,3 +838,46 @@ class TestAssureDispatchWiring:
         assert not missing, (
             f"Tools registered in ASSURE_TOOLS but missing from _DISPATCH: {missing}"
         )
+
+
+class TestAssessGateReadinessErrors:
+    """Regression tests for clear, actionable errors from assess_gate_readiness.
+
+    The handler used to fail with the opaque string "Error: 'gate'" when
+    callers omitted required parameters — a wrapped KeyError. These tests
+    confirm we now return a structured JSON error that names the missing
+    parameter and shows the expected values.
+    """
+
+    async def test_missing_gate_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("assess_gate_readiness", {"project_id": "TEST-X"})
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "missing" in body["error"].lower()
+        assert "GATE_3" in _json.dumps(body)
+
+    async def test_missing_project_id_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("assess_gate_readiness", {"gate": "GATE_3"})
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "missing" in body["error"].lower()
+        assert "project_id" in body["error"]
+
+    async def test_invalid_gate_returns_clear_error(self):
+        import json as _json
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "assess_gate_readiness",
+            {"project_id": "TEST-X", "gate": "GATE_99"},
+        )
+        body = _json.loads(result[0].text)
+        assert "error" in body
+        assert "GATE_99" in body["error"] or "Invalid" in body["error"]
+        assert "expected" in body
