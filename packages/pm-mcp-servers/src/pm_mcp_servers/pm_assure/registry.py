@@ -15,6 +15,10 @@ from .server import (
     _check_confidence_divergence,
     _classify_project_domain,
     _compare_gate_readiness,
+    _create_project_from_profile,
+    _export_dashboard_data,
+    _export_dashboard_html,
+    _get_armm_report,
     _get_assumption_drift,
     _get_cascade_impact,
     _get_gate_readiness_history,
@@ -28,6 +32,7 @@ from .server import (
     _recommend_review_schedule,
     _review_action_status,
     _run_assurance_workflow,
+    _scan_for_red_flags,
     _search_lessons,
     _track_review_actions,
     _validate_assumption,
@@ -57,6 +62,11 @@ _DISPATCH = {
     "assess_gate_readiness": _assess_gate_readiness,
     "get_gate_readiness_history": _get_gate_readiness_history,
     "compare_gate_readiness": _compare_gate_readiness,
+    "scan_for_red_flags": _scan_for_red_flags,
+    "create_project_from_profile": _create_project_from_profile,
+    "export_dashboard_data": _export_dashboard_data,
+    "export_dashboard_html": _export_dashboard_html,
+    "get_armm_report": _get_armm_report,
 }
 
 
