@@ -4,8 +4,8 @@ services:
     runtime: python
     pythonVersion: "3.11"
     buildCommand: >
-      pip install numpy scikit-learn anthropic &&
-      pip install -e "packages/agent-task-planning[mining,anthropic]" &&
+      pip install numpy scikit-learn anthropic z3-solver &&
+      pip install -e "packages/agent-task-planning[mining,anthropic,verified]" &&
       pip install -e packages/pm-data-tools &&
       pip install -e packages/pm-mcp-servers
     startCommand: pda-platform-remote
