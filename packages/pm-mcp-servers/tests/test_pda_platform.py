@@ -1634,3 +1634,124 @@ class TestCalibrationAndConformal:
             f"empirical band coverage {covered:.3f} too far below "
             f"nominal {1 - alpha:.2f}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 9: Confidence→RAG monotonicity kernel (issue #35 / A8)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestMonotonicityVerifier:
+    """Behavioural anchor for the Z3-backed monotonicity proof.
+
+    Confirms the defaults (pm-assumptions's RAG mapping) verify, that a
+    deliberately broken mapping produces a concrete counterexample, and
+    that the verifier is callable from external modules with their own
+    thresholds (the key extensibility property).
+    """
+
+    def test_default_pm_assumptions_mapping_is_proven_monotone(self):
+        from agent_planning.verified import (
+            DEFAULT_RAG_LABELS,
+            DEFAULT_RAG_THRESHOLDS,
+            verify_rag_mapping,
+        )
+
+        result = verify_rag_mapping(
+            thresholds=DEFAULT_RAG_THRESHOLDS,
+            labels=DEFAULT_RAG_LABELS,
+        )
+        assert result.is_proven
+        assert result.status == "PROVEN"
+        assert result.counterexample is None
+        # The audit-trail attributes are populated.
+        assert result.thresholds == tuple(DEFAULT_RAG_THRESHOLDS)
+        assert result.labels == tuple(DEFAULT_RAG_LABELS)
+
+    def test_swapped_labels_produces_concrete_counterexample(self):
+        from agent_planning.verified import verify_rag_mapping
+
+        # Swap GREEN and RED — high score now maps to RED, low to GREEN.
+        # The verifier should find a counterexample.
+        broken_labels = ("GREEN", "AMBER", "RED")  # wrong order
+        result = verify_rag_mapping(
+            thresholds=(40.0, 70.0),
+            labels=broken_labels,
+        )
+        assert not result.is_proven
+        assert result.status == "COUNTEREXAMPLE"
+        assert result.counterexample is not None
+        cx1, cx2 = result.counterexample
+        # The counterexample must respect x1 <= x2.
+        assert cx1 <= cx2
+        # And produce a violation under the broken mapping (where the
+        # ordering treats labels[0]=GREEN < labels[1]=AMBER < labels[2]=RED
+        # by index; so the "value" at low cx1 is index 0 = GREEN and at
+        # high cx2 is index 2 = RED — monotonicity says index(cx1) <=
+        # index(cx2), but the counterexample picks cx1 such that its
+        # index is HIGHER than cx2's, which means by the labels' ordering
+        # we have moved DOWN the label list as input rises).
+        labels_at_cx = result.counterexample_labels
+        assert labels_at_cx is not None
+        # The counterexample labels must be ones that demonstrate the bug.
+        assert labels_at_cx[0] != labels_at_cx[1]
+
+    def test_finer_grained_mapping_with_four_bands_verifies(self):
+        """Verifier scales to arbitrary numbers of bands, not just three."""
+        from agent_planning.verified import verify_rag_mapping
+
+        result = verify_rag_mapping(
+            thresholds=(25.0, 50.0, 75.0),
+            labels=("VERY_LOW", "LOW", "HIGH", "VERY_HIGH"),
+        )
+        assert result.is_proven
+
+    def test_custom_domain_proves_monotonicity_over_zero_to_one_range(self):
+        """The verifier handles domains other than the pm-assumptions [0, 100]."""
+        from agent_planning.verified import verify_rag_mapping
+
+        # 0-1 normalised confidence with the same bands rescaled.
+        result = verify_rag_mapping(
+            thresholds=(0.4, 0.7),
+            labels=("RED", "AMBER", "GREEN"),
+            domain=(0.0, 1.0),
+        )
+        assert result.is_proven
+
+    def test_verify_rag_mapping_is_callable_from_consumer_module(self):
+        """Smoke test: nothing about :func:`verify_rag_mapping` requires
+        special context from agent_planning. A consumer module can
+        import and call it directly."""
+        from agent_planning.verified import verify_rag_mapping
+
+        result = verify_rag_mapping()  # all defaults
+        assert result.is_proven
+
+    def test_evaluate_rag_helper_matches_pm_assumptions_behaviour(self):
+        """The pure-Python helper used by the verifier produces the same
+        labels as the canonical pm_assumptions._rag implementation."""
+        from agent_planning.verified import evaluate_rag
+
+        # pm-assumptions: GREEN if >= 70, AMBER if >= 40, else RED.
+        assert evaluate_rag(0.0) == "RED"
+        assert evaluate_rag(39.999) == "RED"
+        assert evaluate_rag(40.0) == "AMBER"
+        assert evaluate_rag(69.999) == "AMBER"
+        assert evaluate_rag(70.0) == "GREEN"
+        assert evaluate_rag(100.0) == "GREEN"
+
+    def test_proof_result_carries_audit_trail(self):
+        """The result object preserves thresholds/labels/domain for audit chain consumers."""
+        from agent_planning.verified import verify_rag_mapping
+
+        result = verify_rag_mapping(
+            thresholds=(40.0, 70.0),
+            labels=("RED", "AMBER", "GREEN"),
+            domain=(0.0, 100.0),
+        )
+        assert result.thresholds == (40.0, 70.0)
+        assert result.labels == ("RED", "AMBER", "GREEN")
+        assert result.domain == (0.0, 100.0)
+        # The message string includes the verified parameters so audit
+        # consumers can inspect without unpacking the dataclass.
+        assert "PROVEN" in result.message.upper() or "monoton" in result.message.lower()
