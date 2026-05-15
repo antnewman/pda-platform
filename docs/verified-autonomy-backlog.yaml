@@ -1,0 +1,278 @@
+# Verified Autonomy alignment — issue manifest
+#
+# 1 tracking issue + 37 child issues (8 foundations + 29 integrations).
+# Consumed by scripts/create_va_issues.py.
+#
+# Each issue's body is interpolated from the `body_template` plus per-issue
+# fields. Labels are merged from `default_labels` and the issue's own
+# `extra_labels`. All issues land in the `Verified Autonomy alignment`
+# milestone.
+#
+# Source plan: ~/.claude/plans/serene-sleeping-globe.md
+# Source paper: 10.5281/zenodo.19096229 — Newman et al., May 2026
+
+milestone:
+  title: "Verified Autonomy alignment"
+  description: >
+    Closing the gap between the PDA Platform codebase and the Verified
+    Autonomy nine-layer framework (Newman et al., May 2026,
+    DOI 10.5281/zenodo.19096229). 37 PRs grouped into 8 foundations and
+    29 integrations.
+
+labels:
+  - { name: "verified-autonomy",                color: "D946EF", description: "Verified Autonomy alignment work (umbrella label)" }
+  - { name: "layer-1",                          color: "334155", description: "Layer 1 — Inverse Confidence Weighting" }
+  - { name: "layer-2",                          color: "334155", description: "Layer 2 — Outlier Detection as Hard Escalation" }
+  - { name: "layer-3",                          color: "334155", description: "Layer 3 — Making Failures Visible" }
+  - { name: "layer-4",                          color: "334155", description: "Layer 4 — Calibration and Conformal Prediction" }
+  - { name: "layer-5",                          color: "334155", description: "Layer 5 — Deterministic Guardrails" }
+  - { name: "layer-6",                          color: "334155", description: "Layer 6 — RAG as Explainability" }
+  - { name: "layer-7",                          color: "334155", description: "Layer 7 — Adversarial Testing" }
+  - { name: "layer-8",                          color: "334155", description: "Layer 8 — Cryptographic Audit Trails" }
+  - { name: "layer-9",                          color: "334155", description: "Layer 9 — Formal Verification" }
+  - { name: "foundation",                       color: "10B981", description: "Phase 2 — foundation/framework PR" }
+  - { name: "integration",                      color: "64748B", description: "Phase 3 — per-tool / per-module integration PR" }
+  - { name: "evidence-tier-strongest",          color: "10B981", description: "Paper rates as Production code or Industry standard" }
+  - { name: "evidence-tier-peer-reviewed",      color: "F59E0B", description: "Paper rates as Peer-reviewed" }
+  - { name: "evidence-tier-published-research", color: "F59E0B", description: "Paper rates as Published research / methodology" }
+
+tracking_issue:
+  title: "Verified Autonomy alignment — tracking issue"
+  body: |
+    Tracking issue for the Verified Autonomy gap-closure work.
+
+    **Source paper:** Newman et al., *Verified Autonomy: A Field Guide to Engineering Trust in AI Systems*, May 2026.
+    DOI: [10.5281/zenodo.19096229](https://doi.org/10.5281/zenodo.19096229)
+
+    **Gap analysis:** see `PDA-platform-gap-analysis-verified-autonomy.docx` in the repo root, and the plan at `~/.claude/plans/serene-sleeping-globe.md`.
+
+    **Summary.** The paper presents a nine-layer defence-in-depth architecture for engineering trust in AI systems. PDA Platform is cited as the production reference for Layers 1, 2, and 3, with partial gaps where the paper-grade architecture is not surfaced to consumers. Layers 4, 6, 7 are absent. Layers 5 and 8 have substantive primitives but with scope gaps (Layer 5 has no rule-engine gate between AI-authored output and consumer; Layer 8's hash chain only covers NISTA submissions).
+
+    This issue tracks **37 child issues** across two phases:
+    - **Phase 2 — Foundations (8 PRs).** Each introduces a primitive that integrations consume.
+    - **Phase 3 — Integrations (29 PRs).** Each wires a foundation into a specific tool or module.
+
+    ## Conventions
+    - Branch off `dev`; PR to `dev`; never push to `main`.
+    - Commit author: `antnewman <antjsnewman@outlook.com>`. Never `Co-Authored-By: Claude`.
+    - One regression-test class per PR.
+    - Each Phase 3 PR scoped to a single tool/module.
+
+    ## Progress
+    (Child issues are added to the task list below by `scripts/create_va_issues.py`.)
+  extra_labels:
+    - "layer-1"
+    - "layer-2"
+    - "layer-3"
+    - "layer-4"
+    - "layer-5"
+    - "layer-6"
+    - "layer-7"
+    - "layer-8"
+    - "layer-9"
+
+# ─────────────────────────────────────────────────────────────────────────
+# PHASE 2 — Foundations (8 issues)
+# ─────────────────────────────────────────────────────────────────────────
+
+foundations:
+  - id: A1
+    title: "L8 foundation — Generic AuditChain primitive"
+    layer: 8
+    paper_section: "§11.3"
+    evidence_tier: "Industry standard (C2PA, Certificate Transparency, ISO 42001). Mature, legally mandated (EU AI Act Article 50)."
+    evidence_tier_label: "evidence-tier-strongest"
+    scope: |
+      Extract `AuditChain` and `AuditEntry` from `packages/pm-data-tools/src/pm_data_tools/integrations/nista/audit.py` into a generic module at `packages/pm-data-tools/src/pm_data_tools/audit/chain.py`. The NISTA-specific logger becomes a thin wrapper around the generic primitive.
+
+      - Add HMAC-SHA256 signing support (the existing dataclass supports it; surface as a constructor parameter).
+      - Add canonical-JSON serialisation (deterministic key ordering) per paper §11.3.
+      - Add `verify()` and `export_json()` / `from_json()` methods matching the paper's reference implementation.
+      - Add `compute_consistency_hash(decision_dict)` helper for Layer 8's structural-consistency variant (§11.4).
+
+      Tests: hash chain integrity under tampering; HMAC verification with right/wrong keys; canonical serialisation determinism; consistency hash stability across structurally-identical inputs.
+    branch: "feat/L8-generic-audit-chain"
+    depends_on: []
+
+  - id: A2
+    title: "L5 foundation — Output-guardrail policy engine"
+    layer: 5
+    paper_section: "§8.3"
+    evidence_tier: "Industry standard. Mature, widely deployed. No dependencies."
+    evidence_tier_label: "evidence-tier-strongest"
+    scope: |
+      New module `packages/pm-mcp-servers/src/pm_mcp_servers/_guardrails/` (underscore to mark internal). Implements the paper's §8.3 reference architecture.
+
+      - `Rule` dataclass (name, description, severity, condition callable).
+      - `Severity` enum (`BLOCK`, `WARN`, `UNKNOWN`, `INFO`).
+      - `Verdict` enum (`APPROVED`, `FLAGGED`, `REJECTED`).
+      - `evaluate(output_dict, policy: list[Rule]) -> EvaluationResult` returning verdict + audit trail of every rule evaluation.
+      - Helper rule builders: `build_range_rule`, `build_required_field_rule`, `build_allowed_values_rule`, `build_forbidden_phrase_rule` (the last is new — needed for AI-authored prose).
+      - `wrap_tool_output(handler, policy)` decorator: takes an MCP tool handler, wraps the response through the engine, returns either the original output (APPROVED), the output with a `_guardrail_flags` field (FLAGGED), or a structured error JSON (REJECTED). All cases call A1's audit chain to record the rule evaluations.
+
+      Tests: every severity path; audit-trail-records-every-evaluation property; REJECTED short-circuits downstream behaviour; FLAGGED preserves output with annotation.
+    branch: "feat/L5-output-guardrail-engine"
+    depends_on: ["A1"]
+
+  - id: A3
+    title: "L6 foundation — Groundedness checker"
+    layer: 6
+    paper_section: "§9.3"
+    evidence_tier: "Industry practice, published case studies. Widely deployed; groundedness checking less common."
+    evidence_tier_label: "evidence-tier-strongest"
+    scope: |
+      New module `packages/pm-mcp-servers/src/pm_mcp_servers/_groundedness/`. Implements paper §9.3 reference.
+
+      - `compute_groundedness(answer: str, sources: list[dict]) -> GroundednessResult` returning `overall_score`, `grounded: bool`, `ungrounded_terms: list[str]`, `per_source_citation_scores: dict`, `provenance_trail: str`.
+      - Token overlap with stop-word removal (matches paper). Stop-word list lifted from `pm-mcp-servers/_data/stopwords_en.txt` (new).
+      - Threshold tunable, default 0.7 from paper.
+
+      Tests: GROUNDED on faithful citations; UNGROUNDED on hallucination scenario (the paper's Scenario 2); per-source scores attribute correctly; ungrounded-terms list extracted correctly.
+    branch: "feat/L6-groundedness-checker"
+    depends_on: []
+
+  - id: A4
+    title: "L4 foundation — Calibration and conformal-prediction primitives"
+    layer: 4
+    paper_section: "§7.3"
+    evidence_tier: "Peer-reviewed (Guo et al. 2017; Angelopoulos & Bates 2023; Shahbazi et al. 2026). Active research, growing production adoption."
+    evidence_tier_label: "evidence-tier-peer-reviewed"
+    scope: |
+      New module `packages/agent-task-planning/src/agent_planning/calibration/`. Conformal prediction implemented from scratch (matches paper's reference for transparency).
+
+      - `compute_ece(y_true, y_probs, n_bins=15) -> ECEResult` with reliability-diagram bin data.
+      - `find_temperature(logits, y_true) -> float` (temperature scaling).
+      - `apply_temperature_scaling(logits, T)`.
+      - `calibrate_conformal(y_cal, probs_cal, alpha=0.1) -> float` (returns conformal threshold).
+      - `conformal_predict(probs, q_hat) -> list[set]` (returns prediction sets).
+      - `evaluate_coverage(y_true, prediction_sets) -> float`.
+      - `conformal_predict_band(point_estimate, calibration_residuals, alpha=0.2) -> tuple[float, float]` — for the Monte Carlo / benchmark-percentile use case where there's a single point estimate and a history of residuals.
+
+      Dependencies: `numpy`, `scipy`, `scikit-learn` (already in the platform).
+
+      Tests: paper's `test_empirical_coverage_meets_guarantee_alpha_01` (90% nominal → ≥88% empirical on synthetic split); temperature-scaling-reduces-ECE; ECE-on-perfectly-calibrated-data-is-zero.
+    branch: "feat/L4-calibration-and-conformal-primitives"
+    depends_on: []
+
+  - id: A5
+    title: "L2 foundation — Four-tier escalation router with OR fail-safe"
+    layer: 2
+    paper_section: "§5.3"
+    evidence_tier: "Production code (PDA Platform). Proven in production. No dependencies."
+    evidence_tier_label: "evidence-tier-strongest"
+    scope: |
+      New module `packages/agent-task-planning/src/agent_planning/escalation/`. Lifts paper's §5.3 reference.
+
+      - `EscalationLevel` enum (`EXPERT_REQUIRED`, `DETAILED_REVIEW`, `SPOT_CHECK`, `NONE`).
+      - `route(values, confidence) -> RoutingDecision` with the **OR-condition fail-safe**: outliers OR low confidence each independently trigger escalation.
+      - Reuses existing `compute_iqr` and `detect_numeric_outliers` from `confidence/aggregation.py`.
+      - Adds plain-English `reason` strings to each outlier flag (paper-grade behaviour the current implementation lacks).
+      - Configurable thresholds (defaults match paper: 0.4, 0.6, 0.8).
+
+      Tests: every routing path; OR-condition (perfect confidence + outlier still routes to EXPERT_REQUIRED); boundary values; reason strings present on all outlier flags.
+    branch: "feat/L2-escalation-router"
+    depends_on: []
+
+  - id: A6
+    title: "L3 foundation — Quality-score and potential-hallucinations primitives"
+    layer: 3
+    paper_section: "§6.3"
+    evidence_tier: "Production code (PDA Platform). Proven in production. No dependencies."
+    evidence_tier_label: "evidence-tier-strongest"
+    scope: |
+      New module `packages/agent-task-planning/src/agent_planning/quality/`. Lifts paper's §6.3 reference.
+
+      - `compute_quality_score(coherence, relevance, completeness, semantic_entropy) -> QualityScore`.
+      - Formula matches paper exactly: weights 0.4/0.4/0.2, entropy penalty `max(0, entropy - 0.5) * 0.5`.
+      - `flag_potential_hallucinations(samples, threshold=0.7) -> list[str]`.
+      - `compute_pass_rate(samples) -> float`.
+
+      Tests: entropy-below-0.5-no-penalty; max-entropy-penalty-is-quarter; high-entropy-pushes-borderline-below-threshold; strict-greater-than at the flag boundary.
+    branch: "feat/L3-quality-score-and-hallucinations"
+    depends_on: []
+
+  - id: A7
+    title: "L7 foundation — RedTeam harness"
+    layer: 7
+    paper_section: "§10.3"
+    evidence_tier: "Published research (CART, EchoGram, PyRIT). Active research, tooling maturing. No dependencies."
+    evidence_tier_label: "evidence-tier-published-research"
+    scope: |
+      New module `packages/pm-mcp-servers/src/pm_mcp_servers/_redteam/`. Lifts paper's §10.3 reference.
+
+      - `PolicyRule`, `TestCase`, `FindingSeverity` (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`/`NONE`).
+      - `RedTeamHarness(system_under_test, policy)` with `run_suite(tests) -> Report`.
+      - Forbidden-pattern matching (case-insensitive substring; transparent and auditable per paper §10.5).
+      - Exception capture (a crashing system is a finding, not a harness failure).
+      - Aggregation: pass rate, findings by severity, findings by category.
+
+      Tests: baseline-passes; violation-detected-at-correct-severity; exception-captured-not-thrown; aggregation correct.
+    branch: "feat/L7-redteam-harness"
+    depends_on: []
+
+  - id: A8
+    title: "L9 foundation — Confidence→RAG monotonicity verification kernel"
+    layer: 9
+    paper_section: "§12.3"
+    evidence_tier: "Peer-reviewed (SMT verification, Constrained AI). Research stage for neural networks; production for small critical components."
+    evidence_tier_label: "evidence-tier-peer-reviewed"
+    scope: |
+      New module `packages/agent-task-planning/src/agent_planning/verified/`. Single formally-verified property: the mapping from confidence score (0.0–1.0) to RAG (`RED`/`AMBER`/`GREEN`) is monotone non-decreasing. Currently this property is encoded implicitly across many tools; Z3 formalises and proves it.
+
+      - Encode the mapping as constraints in Z3 (`if conf < 40: RED; elif conf < 70: AMBER; else: GREEN` — current thresholds from pm-assumptions).
+      - Prove: for all `c1, c2` in `[0, 1]`, `c1 <= c2 ⇒ rag_value(c1) <= rag_value(c2)` where `RED < AMBER < GREEN`.
+      - Provide a `verify_rag_mapping(rag_function) -> ProofResult` that any module's local RAG mapping can be passed through; returns PROVEN or a counterexample.
+
+      Dependency: `z3-solver` (new — must be added to pyproject.toml).
+
+      Tests: built-in mapping verifies; deliberately-broken mapping returns counterexample; `verify_rag_mapping` callable from external module.
+    branch: "feat/L9-monotonicity-kernel"
+    depends_on: []
+
+# ─────────────────────────────────────────────────────────────────────────
+# PHASE 3 — Integrations (29 issues)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# B1–B9 — Layer 5 guardrail integrations
+# B10–B18 — Layer 6 groundedness integrations
+# B19–B23 — Layer 8 audit-chain integrations
+# B24–B26 — Layer 4 conformal/calibration integrations
+# B27–B28 — Layer 2 & 3 surfacing
+# B29 — Layer 1 gap-surfacing
+
+integrations:
+  # ─── L5 (9) ───────────────────────────────────────────────────────────
+  - { id: B1, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-board-exception-report-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_board_exception_report guardrail", tool: "generate_board_exception_report", module: "pm-reporting", note: "Highest stakes — board-facing" }
+  - { id: B2, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-assumption-report-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_assumption_report guardrail", tool: "generate_assumption_report", module: "pm-assumptions", note: "Now used by Laura's hackathon demo" }
+  - { id: B3, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-gate-review-summary-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_gate_review_summary guardrail", tool: "generate_gate_review_summary", module: "pm-reporting", note: "Treasury submission shape" }
+  - { id: B4, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-narrative-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_narrative guardrail", tool: "generate_narrative", module: "pm-analyse", note: "Used by Evidence Engine downstream" }
+  - { id: B5, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-premortem-questions-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_premortem_questions guardrail", tool: "generate_premortem_questions", module: "pm-knowledge", note: "Recommended Loom entry tool" }
+  - { id: B6, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-benefits-narrative-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_benefits_narrative guardrail", tool: "generate_benefits_narrative", module: "pm-brm", note: "Gate-review evidence" }
+  - { id: B7, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-portfolio-summary-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_portfolio_summary guardrail", tool: "generate_portfolio_summary", module: "pm-reporting", note: "Cross-project rollup" }
+  - { id: B8, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-lessons-section-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_lessons_section guardrail", tool: "generate_lessons_section", module: "pm-lessons", note: "Lower business stakes" }
+  - { id: B9, layer: 5, paper_section: "§8.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L5-pir-template-guardrail-integration", depends_on: ["A1","A2"], title: "L5 integration — generate_pir_template guardrail", tool: "generate_pir_template", module: "pm-reporting", note: "PIR construction" }
+  # ─── L6 (9) ───────────────────────────────────────────────────────────
+  - { id: B10, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-board-exception-report-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_board_exception_report groundedness", tool: "generate_board_exception_report", module: "pm-reporting" }
+  - { id: B11, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-assumption-report-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_assumption_report groundedness", tool: "generate_assumption_report", module: "pm-assumptions" }
+  - { id: B12, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-gate-review-summary-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_gate_review_summary groundedness", tool: "generate_gate_review_summary", module: "pm-reporting" }
+  - { id: B13, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-narrative-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_narrative groundedness", tool: "generate_narrative", module: "pm-analyse" }
+  - { id: B14, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-premortem-questions-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_premortem_questions groundedness", tool: "generate_premortem_questions", module: "pm-knowledge" }
+  - { id: B15, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-benefits-narrative-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_benefits_narrative groundedness", tool: "generate_benefits_narrative", module: "pm-brm" }
+  - { id: B16, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-portfolio-summary-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_portfolio_summary groundedness", tool: "generate_portfolio_summary", module: "pm-reporting" }
+  - { id: B17, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-lessons-section-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_lessons_section groundedness", tool: "generate_lessons_section", module: "pm-lessons" }
+  - { id: B18, layer: 6, paper_section: "§9.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L6-pir-template-groundedness-integration", depends_on: ["A3"], title: "L6 integration — generate_pir_template groundedness", tool: "generate_pir_template", module: "pm-reporting" }
+  # ─── L8 (5) ───────────────────────────────────────────────────────────
+  - { id: B19, layer: 8, paper_section: "§11.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L8-pm-assure-audit-chain", depends_on: ["A1"], title: "L8 integration — pm-assure audit chain", module: "pm-assure", decisions: "assess_gate_readiness, scan_for_red_flags, log_override_decision, run_assurance_workflow" }
+  - { id: B20, layer: 8, paper_section: "§11.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L8-pm-assumptions-audit-chain", depends_on: ["A1"], title: "L8 integration — pm-assumptions audit chain", module: "pm-assumptions", decisions: "score_assumption_confidence, detect_external_drift, generate_assumption_report" }
+  - { id: B21, layer: 8, paper_section: "§11.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L8-pm-reporting-audit-chain", depends_on: ["A1","B1","B3","B7","B9"], title: "L8 integration — pm-reporting audit chain", module: "pm-reporting", decisions: "All generate_* outputs (after B1–B9 land — audit entry includes guardrail verdict)" }
+  - { id: B22, layer: 8, paper_section: "§11.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L8-pm-knowledge-audit-chain", depends_on: ["A1"], title: "L8 integration — pm-knowledge audit chain", module: "pm-knowledge", decisions: "run_reference_class_check, generate_premortem_questions" }
+  - { id: B23, layer: 8, paper_section: "§11.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L8-pm-simulation-audit-chain", depends_on: ["A1","B25"], title: "L8 integration — pm-simulation audit chain", module: "pm-simulation", decisions: "Monte Carlo P50/P80 outputs (after B25 — chain the band metadata)" }
+  # ─── L4 (3) ───────────────────────────────────────────────────────────
+  - { id: B24, layer: 4, paper_section: "§7.3", evidence_tier_label: "evidence-tier-peer-reviewed", branch: "feat/L4-evaluate-calibration-tool", depends_on: ["A4"], title: "L4 integration — evaluate_calibration MCP tool", custom_body: "New MCP tool. Takes a project_id and an outcome history; runs A4's `compute_ece`; returns ECE + reliability-diagram-data JSON. Lives in pm-analyse." }
+  - { id: B25, layer: 4, paper_section: "§7.3", evidence_tier_label: "evidence-tier-peer-reviewed", branch: "feat/L4-monte-carlo-conformal-bands", depends_on: ["A4"], title: "L4 integration — Monte Carlo conformal bands", custom_body: "Modify pm-simulation to wrap its P50/P80 outputs in conformal prediction intervals using A4's `conformal_predict_band`. Requires a calibration history (held-out actuals); store created in this PR with a `simulation_residuals` table." }
+  - { id: B26, layer: 4, paper_section: "§7.3", evidence_tier_label: "evidence-tier-peer-reviewed", branch: "feat/L4-reference-class-calibration", depends_on: ["A4"], title: "L4 integration — Reference-class calibration", custom_body: "Modify `run_reference_class_check` in pm-knowledge to return a conformal interval around the recommended P80 value rather than a point estimate. Calibration residuals computed from existing benchmark sample data." }
+  # ─── L2/L3 surfacing (2) ──────────────────────────────────────────────
+  - { id: B27, layer: 2, paper_section: "§5.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L2-escalation-router-integration", depends_on: ["A5"], title: "L2 surfacing — escalation router MCP tool", custom_body: "Add an MCP tool `route_outputs_to_review(project_id, decision_field)` that consumes confidence scores from store and produces the four-tier routing decision using A5. Surface in pm-assure." }
+  - { id: B28, layer: 3, paper_section: "§6.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L3-hallucinations-list-integration", depends_on: ["A6","B1","B2","B3","B4","B5","B6","B7","B8","B9"], title: "L3 surfacing — hallucinations list on AI tools", custom_body: "Modify the nine AI-authored tools' responses to include a `_quality` field with the quality-score from A6 and a `potential_hallucinations` boolean computed from semantic entropy. Cross-cutting; touches the same nine tools but adds a single field per tool." }
+  # ─── L1 surfacing (1) ─────────────────────────────────────────────────
+  - { id: B29, layer: 1, paper_section: "§4.3", evidence_tier_label: "evidence-tier-strongest", branch: "feat/L1-confidence-gap-surfacing", depends_on: [], title: "L1 surfacing — surface confidence gap to consumers", custom_body: "Modify `compute_overall_confidence` callers in agent-task-planning to also compute the plain arithmetic mean and surface both values (`{\"weighted\": x, \"plain_mean\": y, \"gap\": y - x}`) so the gap is visible to consumers. Backward-compatible: existing callers can ignore the new fields." }
