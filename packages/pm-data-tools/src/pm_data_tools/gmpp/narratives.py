@@ -2,21 +2,27 @@
 
 This module uses the agent-task-planning framework to generate professional
 civil service narratives with confidence scoring and multi-sample consensus.
+
+Imports from ``agent_planning`` are deliberately deferred to first use.
+``agent_planning`` transitively pulls in scikit-learn (via the ``mining``
+sub-module), which is a ~5 second cold-import on slow disks. Loading it
+at module-import time was pushing the unified MCP server's startup past
+the Render port-scan timeout. The schemas below are constructed lazily on
+first :class:`NarrativeGenerator` instantiation so that simply importing
+``pm_data_tools.gmpp`` (which the unified server does) stays cheap.
 """
 
 from datetime import datetime
 
-from agent_planning import ConfidenceExtractor
-from agent_planning.confidence import CustomSchema
-from agent_planning.guardrails import GuardrailConfig
-from agent_planning.providers import AnthropicProvider
-
 from pm_data_tools.gmpp.models import DCANarrative, ReviewLevel
 
-# Custom schema for GMPP narratives
-GMPP_DCA_SCHEMA = CustomSchema(
-    name="GMPP DCA Narrative",
-    extraction_prompt="""Generate a Delivery Confidence Assessment narrative
+# ── Lazy schemas ──────────────────────────────────────────────────────────
+# Plain prompt strings live at module load (cheap). The ``CustomSchema``
+# objects themselves are built on first call to :func:`_ensure_schemas`
+# (i.e. when ``NarrativeGenerator`` is constructed) — at which point
+# importing ``agent_planning`` is unavoidable anyway.
+
+_GMPP_DCA_PROMPT = """Generate a Delivery Confidence Assessment narrative
 suitable for UK Government GMPP quarterly reporting.
 
 Requirements:
@@ -29,13 +35,9 @@ Requirements:
 - Describe critical issues and their impact
 - Outline mitigation actions being taken
 
-Return as JSON with field: narrative_text""",
-    aggregation_fields={"text": ["narrative_text"]},
-)
+Return as JSON with field: narrative_text"""
 
-GMPP_COST_SCHEMA = CustomSchema(
-    name="GMPP Cost Narrative",
-    extraction_prompt="""Generate a cost performance narrative for UK Government
+_GMPP_COST_PROMPT = """Generate a cost performance narrative for UK Government
 GMPP quarterly reporting.
 
 Requirements:
@@ -45,13 +47,9 @@ Requirements:
 - Describe cost management actions
 - Mention any budget reallocations or contingency usage
 
-Return as JSON with field: narrative_text""",
-    aggregation_fields={"text": ["narrative_text"]},
-)
+Return as JSON with field: narrative_text"""
 
-GMPP_SCHEDULE_SCHEMA = CustomSchema(
-    name="GMPP Schedule Narrative",
-    extraction_prompt="""Generate a schedule performance narrative for UK Government
+_GMPP_SCHEDULE_PROMPT = """Generate a schedule performance narrative for UK Government
 GMPP quarterly reporting.
 
 Requirements:
@@ -61,13 +59,9 @@ Requirements:
 - Describe critical path status
 - Mention any schedule recovery actions
 
-Return as JSON with field: narrative_text""",
-    aggregation_fields={"text": ["narrative_text"]},
-)
+Return as JSON with field: narrative_text"""
 
-GMPP_BENEFITS_SCHEMA = CustomSchema(
-    name="GMPP Benefits Narrative",
-    extraction_prompt="""Generate a benefits realisation narrative for UK Government
+_GMPP_BENEFITS_PROMPT = """Generate a benefits realisation narrative for UK Government
 GMPP quarterly reporting.
 
 Requirements:
@@ -77,13 +71,9 @@ Requirements:
 - Explain any variance from plan
 - Mention benefits tracking and measurement approach
 
-Return as JSON with field: narrative_text""",
-    aggregation_fields={"text": ["narrative_text"]},
-)
+Return as JSON with field: narrative_text"""
 
-GMPP_RISK_SCHEMA = CustomSchema(
-    name="GMPP Risk Narrative",
-    extraction_prompt="""Generate a risk status narrative for UK Government
+_GMPP_RISK_PROMPT = """Generate a risk status narrative for UK Government
 GMPP quarterly reporting.
 
 Requirements:
@@ -93,9 +83,58 @@ Requirements:
 - Describe mitigation actions in progress
 - Mention any risks closed or newly identified this quarter
 
-Return as JSON with field: narrative_text""",
-    aggregation_fields={"text": ["narrative_text"]},
-)
+Return as JSON with field: narrative_text"""
+
+
+# Schemas are populated lazily by ``_ensure_schemas``. They remain ``None``
+# until the first ``NarrativeGenerator`` is constructed. Existing callers
+# that imported ``GMPP_DCA_SCHEMA`` directly will still see the schema
+# object once ``_ensure_schemas`` has run; module-level access before that
+# point will get ``None``. In practice nothing outside this module imports
+# these names — they were only ever referenced from class methods below.
+GMPP_DCA_SCHEMA = None
+GMPP_COST_SCHEMA = None
+GMPP_SCHEDULE_SCHEMA = None
+GMPP_BENEFITS_SCHEMA = None
+GMPP_RISK_SCHEMA = None
+
+
+def _ensure_schemas() -> None:
+    """Build the five GMPP schemas on first call. Idempotent."""
+    global GMPP_DCA_SCHEMA, GMPP_COST_SCHEMA, GMPP_SCHEDULE_SCHEMA
+    global GMPP_BENEFITS_SCHEMA, GMPP_RISK_SCHEMA
+
+    if GMPP_DCA_SCHEMA is not None:
+        return
+
+    # Deferred — pulls in agent_planning (and transitively scikit-learn).
+    from agent_planning.confidence import CustomSchema
+
+    GMPP_DCA_SCHEMA = CustomSchema(
+        name="GMPP DCA Narrative",
+        extraction_prompt=_GMPP_DCA_PROMPT,
+        aggregation_fields={"text": ["narrative_text"]},
+    )
+    GMPP_COST_SCHEMA = CustomSchema(
+        name="GMPP Cost Narrative",
+        extraction_prompt=_GMPP_COST_PROMPT,
+        aggregation_fields={"text": ["narrative_text"]},
+    )
+    GMPP_SCHEDULE_SCHEMA = CustomSchema(
+        name="GMPP Schedule Narrative",
+        extraction_prompt=_GMPP_SCHEDULE_PROMPT,
+        aggregation_fields={"text": ["narrative_text"]},
+    )
+    GMPP_BENEFITS_SCHEMA = CustomSchema(
+        name="GMPP Benefits Narrative",
+        extraction_prompt=_GMPP_BENEFITS_PROMPT,
+        aggregation_fields={"text": ["narrative_text"]},
+    )
+    GMPP_RISK_SCHEMA = CustomSchema(
+        name="GMPP Risk Narrative",
+        extraction_prompt=_GMPP_RISK_PROMPT,
+        aggregation_fields={"text": ["narrative_text"]},
+    )
 
 
 class NarrativeGenerator:
@@ -129,6 +168,16 @@ class NarrativeGenerator:
             samples: Number of samples for consensus (default: 5)
             confidence_threshold: Minimum confidence for early stopping (default: 0.6)
         """
+        # Deferred imports — see module docstring. Loading these here keeps
+        # ``import pm_data_tools.gmpp`` cheap (needed by the unified MCP
+        # server's cold start on Render).
+        from agent_planning import ConfidenceExtractor
+        from agent_planning.guardrails import GuardrailConfig
+        from agent_planning.providers import AnthropicProvider
+
+        # Build the lazy schemas on first construction.
+        _ensure_schemas()
+
         self.api_key = api_key
         self.model = model
         self.samples = samples
