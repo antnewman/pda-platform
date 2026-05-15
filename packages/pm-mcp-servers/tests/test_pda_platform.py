@@ -1755,3 +1755,147 @@ class TestMonotonicityVerifier:
         # The message string includes the verified parameters so audit
         # consumers can inspect without unpacking the dataclass.
         assert "PROVEN" in result.message.upper() or "monoton" in result.message.lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_board_exception_report (issue #36 / B1)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestBoardExceptionReportGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on the
+    board exception report tool.
+
+    Covers the three verdict paths in the context of the AI-authored
+    board report:
+    - APPROVED: clean output (the evidence-only fallback) passes through
+      unchanged as markdown.
+    - REJECTED: output containing a forbidden phrase is replaced with
+      structured error JSON; original prose is suppressed.
+    - FLAGGED: not exercised here (no WARN-severity rules in the policy)
+      but the policy can be extended without changing this test.
+    """
+
+    def _seed_minimal_project(self, project_id: str = "BOARD-GUARDRAIL-TEST"):
+        """Seed a single risk so _has_any_data returns True."""
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Test risk for guardrail integration",
+                "description": "Seeded for B1 regression test.",
+                "category": "DELIVERY",
+                "likelihood": 4,
+                "impact": 4,
+                "risk_score": 16,
+                "status": "OPEN",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_clean_evidence_only_report_passes_through_as_markdown(self, monkeypatch):
+        """The deterministic evidence-only fallback produces clean
+        markdown — no forbidden phrases — so it should pass through the
+        guardrail untouched and the consumer should see the original
+        markdown response shape."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-GUARDRAIL-CLEAN")
+        result = await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+
+        text = result[0].text
+        # Markdown response shape preserved — not wrapped in JSON.
+        assert text.startswith("#") or "Exception Report" in text
+        # No guardrail-rejection error.
+        assert "guardrail_rejected" not in text
+        # No FLAGGED notice prepended (clean output).
+        assert "L5 guardrail flagged" not in text
+
+    async def test_forbidden_phrase_in_output_triggers_rejection(self, monkeypatch):
+        """When the evidence-only fallback (or Claude) produces a
+        forbidden phrase, the guardrail replaces the report with a
+        structured error JSON. The original prose containing the
+        forbidden phrase is NOT returned — this is the hard fail-safe
+        that prevents a board-facing consumer from rendering it."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-GUARDRAIL-REJECT")
+
+        # Force the fallback path to emit text containing a forbidden
+        # phrase. The forbidden-phrase rule will then fire and the
+        # guardrail will reject the output.
+        def fake_compose(_project_id, _period, _data):
+            return (
+                "# Board Exception Report\n\n"
+                "We are 100% certain the project will deliver on time.\n\n"
+                "(rest of compromising report content)"
+            )
+
+        monkeypatch.setattr(
+            reporting_server,
+            "_compose_evidence_only_board_report",
+            fake_compose,
+        )
+
+        result = await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+
+        import json as _json
+
+        # The original prose is suppressed — the offending sentence
+        # must NOT appear in the response.
+        text = result[0].text
+        assert "We are 100% certain the project will deliver" not in text
+        # The response is structured error JSON, not markdown.
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        # At least one rule fired.
+        assert len(payload["triggered"]) >= 1
+        triggered_names = [t["rule_name"] for t in payload["triggered"]]
+        assert any("forbidden_phrase" in name for name in triggered_names)
+
+    async def test_template_leak_phrase_also_rejected(self, monkeypatch):
+        """The policy catches template-leak failures — the LLM emits
+        scaffolding placeholders rather than substantive content."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-GUARDRAIL-LEAK")
+
+        def fake_compose(_project_id, _period, _data):
+            return (
+                "# Board Exception Report\n\n"
+                "## Exception 1: [INSERT NARRATIVE HERE]\n"
+                "Situation: TBD\n"
+            )
+
+        monkeypatch.setattr(
+            reporting_server,
+            "_compose_evidence_only_board_report",
+            fake_compose,
+        )
+
+        result = await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+
+        import json as _json
+
+        payload = _json.loads(result[0].text)
+        assert payload["error"] == "guardrail_rejected"

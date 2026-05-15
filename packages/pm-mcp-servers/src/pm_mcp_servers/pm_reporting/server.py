@@ -18,7 +18,50 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+
 server = Server("pm-reporting")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for board exception reports
+# ─────────────────────────────────────────────────────────────────────────
+# This is the policy applied to the AI-authored board report before it is
+# returned to the caller. The forbidden-phrase rule rejects outputs that
+# overclaim certainty in a board context (a board exception report must
+# be measured and evidence-driven — phrases like "100% certain" or
+# "guaranteed" overstate confidence and have no place in an exception
+# report intended for ministers or Parliament). Template-leak phrases
+# catch the failure mode where the LLM emits scaffolding rather than
+# substantive content.
+#
+# Each phrase is matched case-insensitively. Adding a phrase here without
+# changing the test suite is intentional — the regression test asserts
+# the *behaviour* (rejection occurs, original prose is suppressed) rather
+# than the specific phrase list.
+_BOARD_REPORT_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "TODO",
+            "TBD",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
 
 GATE_NAMES = {
     0: "Strategic Assessment",
@@ -712,16 +755,17 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
                      "Load project data using pm-data, pm-risk, pm-brm, and pm-financial tools first."
         }))]
 
-    # If the API key is missing, return a deterministic evidence-only board
-    # report rather than failing. Same graceful-fallback pattern as
-    # pm_assumptions/_fetch_ons uses for failed external API calls: same
-    # output shape, clearly-labelled fallback, includes the reason.
+    # If the API key is missing, fall through with the deterministic
+    # evidence-only board report (still routed through the L5 guardrail
+    # below). Same graceful-fallback pattern as pm_assumptions/_fetch_ons
+    # uses for failed external API calls: same output shape, clearly-
+    # labelled fallback, includes the reason.
     client = _get_anthropic_client()
     if client is None:
         document = _compose_evidence_only_board_report(
             project_id, reporting_period, project_data
         )
-        return [TextContent(type="text", text=document)]
+        return _apply_board_report_guardrail(document)
 
     today = date.today().isoformat()
     data_summary = json.dumps(project_data, indent=2, default=str)
@@ -772,6 +816,54 @@ Rules:
             project_id, reporting_period, project_data
         )
 
+    return _apply_board_report_guardrail(document)
+
+
+def _apply_board_report_guardrail(document: str) -> list[TextContent]:
+    """Apply the L5 deterministic guardrail to a generated board report.
+
+    APPROVED: pass through unchanged as markdown.
+    FLAGGED: prepend a guardrail-notice block but keep the document.
+    REJECTED: replace the document with structured error JSON so a
+        board-facing consumer cannot accidentally render an output that
+        contains forbidden phrases (hard fail-safe).
+
+    Shared between the Claude-authored and evidence-only fallback paths
+    so the same policy applies regardless of how the document was
+    produced. See ``_BOARD_REPORT_POLICY`` for the rule set.
+    """
+    result = evaluate({"document": document}, _BOARD_REPORT_POLICY)
+    if result.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": result.verdict.value,
+                        "message": (
+                            "Generated board exception report contained one "
+                            "or more phrases forbidden by the L5 deterministic "
+                            "policy. Inspect `triggered` for the failing "
+                            "rules; the original prose has been suppressed "
+                            "to prevent board-facing rendering."
+                        ),
+                        "triggered": [e.to_dict() for e in result.triggered],
+                        "evaluations": [e.to_dict() for e in result.evaluations],
+                    }
+                ),
+            )
+        ]
+    if result.verdict == Verdict.FLAGGED:
+        notice_lines = [
+            "> ⚠️ **L5 guardrail flagged this report.** Reviewer attention required.",
+            ">",
+        ]
+        for triggered in result.triggered:
+            notice_lines.append(
+                f"> - {triggered.rule_name}: {triggered.message}"
+            )
+        document = "\n".join(notice_lines) + "\n\n" + document
     return [TextContent(type="text", text=document)]
 
 
