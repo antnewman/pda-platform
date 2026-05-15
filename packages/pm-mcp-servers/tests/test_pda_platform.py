@@ -1373,3 +1373,264 @@ class TestGuardrailEngine:
         # Non-JSON output passes through untouched — engine has nothing
         # to evaluate against an opaque blob.
         assert result[0].text == "this is not JSON"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 4: Calibration and conformal prediction (issue #31 / A4)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestCalibrationAndConformal:
+    """Behavioural anchor for L4 calibration and conformal-prediction primitives.
+
+    Anchors the paper's headline tests:
+    - ECE-on-perfectly-calibrated-data-is-zero
+    - temperature-scaling-reduces-ECE on a synthetic overconfident classifier
+    - empirical-coverage-meets-guarantee on a synthetic split-conformal run
+      at alpha=0.1 (90% nominal → at least ~88% empirical)
+
+    Plus the regression-band variant used by the Monte Carlo / benchmark
+    pipelines.
+    """
+
+    # ── ECE ───────────────────────────────────────────────────────────
+
+    def test_ece_perfectly_calibrated_classifier_is_zero(self):
+        import numpy as np
+
+        from agent_planning.calibration import compute_ece
+
+        # Synthetic: every prediction has confidence == accuracy. Build
+        # two cohorts — one with confidence 0.9 and accuracy 0.9; one
+        # with confidence 1.0 and accuracy 1.0.
+        rng = np.random.default_rng(0)
+        n_per = 500
+
+        # Cohort 1: top-class prob ~ 0.9, correct 90% of the time.
+        cohort1_probs = np.full((n_per, 2), 0.0)
+        cohort1_probs[:, 1] = 0.9
+        cohort1_probs[:, 0] = 0.1
+        cohort1_correct_mask = rng.random(n_per) < 0.9
+        cohort1_y = np.where(cohort1_correct_mask, 1, 0)
+
+        # Cohort 2: top-class prob 1.0, always correct.
+        cohort2_probs = np.full((n_per, 2), 0.0)
+        cohort2_probs[:, 1] = 1.0
+        cohort2_probs[:, 0] = 0.0
+        cohort2_y = np.ones(n_per, dtype=int)
+
+        y_true = np.concatenate([cohort1_y, cohort2_y])
+        y_probs = np.concatenate([cohort1_probs, cohort2_probs])
+
+        result = compute_ece(y_true, y_probs, n_bins=15)
+        # With this size of synthetic data, the empirical accuracy in
+        # the 0.9 cohort is within sampling noise of 0.9; the gap is
+        # well below 0.03. The paper's "is zero" reference is the
+        # population-level statement; we use a tolerant assertion.
+        assert result.ece < 0.03
+        assert result.n_samples == 2 * n_per
+
+    def test_ece_uncalibrated_classifier_has_nonzero_ece(self):
+        import numpy as np
+
+        from agent_planning.calibration import compute_ece
+
+        rng = np.random.default_rng(1)
+        n = 1000
+        # Severely overconfident: always predicts confidence 0.95 but
+        # only correct 60% of the time.
+        probs = np.full((n, 2), 0.0)
+        probs[:, 1] = 0.95
+        probs[:, 0] = 0.05
+        correct = rng.random(n) < 0.6
+        y_true = np.where(correct, 1, 0)
+
+        result = compute_ece(y_true, probs, n_bins=15)
+        # ECE should be close to |0.95 - 0.6| = 0.35.
+        assert result.ece > 0.3
+
+    # ── Temperature scaling ───────────────────────────────────────────
+
+    def test_temperature_scaling_reduces_ece_on_overconfident_classifier(self):
+        import numpy as np
+
+        from agent_planning.calibration import (
+            apply_temperature_scaling,
+            compute_ece,
+            find_temperature,
+        )
+
+        rng = np.random.default_rng(2)
+        n = 3000
+        n_classes = 4
+
+        # Build a well-calibrated logit/label pair: labels sampled FROM
+        # the softmax of the soft logits, so the well-calibrated
+        # softmax probabilities truly match the empirical class
+        # distribution per row.
+        logits_soft = rng.normal(scale=1.5, size=(n, n_classes))
+        soft_probs = apply_temperature_scaling(logits_soft, temperature=1.0)
+        # Sample one label per row from its probability vector.
+        uniforms = rng.random(n)
+        cum = np.cumsum(soft_probs, axis=1)
+        y_true = (uniforms[:, None] < cum).argmax(axis=1)
+
+        # Now make the model overconfident by scaling the logits by
+        # K > 1. The softmax of K·logits is sharper than soft_probs —
+        # so the predicted confidence exceeds the true accuracy.
+        K = 4.0
+        logits_overconf = logits_soft * K
+
+        raw_probs = apply_temperature_scaling(logits_overconf, temperature=1.0)
+        ece_before = compute_ece(y_true, raw_probs, n_bins=15).ece
+
+        # Fit temperature on this calibration set. The minimiser
+        # should find T close to K = 4.0, undoing the overconfidence.
+        T = find_temperature(logits_overconf, y_true)
+
+        scaled_probs = apply_temperature_scaling(logits_overconf, temperature=T)
+        ece_after = compute_ece(y_true, scaled_probs, n_bins=15).ece
+
+        # Overconfident classifiers need T > 1 to soften. Test the
+        # direction of the fix and the materiality of the gain.
+        assert T > 1.0, f"expected T > 1 for overconfident classifier; got {T}"
+        assert ece_after < ece_before, (
+            f"temperature scaling failed to reduce ECE: "
+            f"before={ece_before:.4f}, after={ece_after:.4f}"
+        )
+        # The corrected ECE should be materially lower (loose bound).
+        assert ece_after < 0.5 * ece_before
+
+    def test_apply_temperature_scaling_at_T_one_is_softmax(self):
+        import numpy as np
+
+        from agent_planning.calibration import apply_temperature_scaling
+
+        logits = np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]])
+        probs = apply_temperature_scaling(logits, temperature=1.0)
+        # Each row sums to 1.
+        assert np.allclose(probs.sum(axis=1), 1.0)
+        # T=1.0 reproduces softmax; row 2 is uniform.
+        assert np.allclose(probs[1], [1 / 3, 1 / 3, 1 / 3])
+
+    # ── Split conformal prediction ────────────────────────────────────
+
+    def test_empirical_coverage_meets_guarantee_alpha_01(self):
+        """Paper's headline test: 90% nominal → at least ~88% empirical."""
+        import numpy as np
+
+        from agent_planning.calibration import (
+            calibrate_conformal,
+            conformal_predict,
+            evaluate_coverage,
+        )
+
+        rng = np.random.default_rng(3)
+        n_total = 2000
+        n_classes = 5
+        alpha = 0.1
+
+        # Synthetic noisy classifier: probabilities sampled from
+        # Dirichlet with a mode peaked on the true class, but
+        # severely under-calibrated.
+        y_true = rng.integers(0, n_classes, size=n_total)
+        probs = np.empty((n_total, n_classes))
+        for i in range(n_total):
+            base = np.full(n_classes, 0.2)
+            base[y_true[i]] = 2.0  # peak on the true class
+            probs[i] = rng.dirichlet(base)
+
+        # Split into calibration and test sets.
+        split = n_total // 2
+        y_cal, y_test = y_true[:split], y_true[split:]
+        probs_cal, probs_test = probs[:split], probs[split:]
+
+        q_hat = calibrate_conformal(y_cal, probs_cal, alpha=alpha)
+        prediction_sets = conformal_predict(probs_test, q_hat)
+        coverage = evaluate_coverage(y_test, prediction_sets)
+
+        # Marginal coverage guarantee under exchangeability:
+        # P(y in C) >= 1 - alpha (here 0.9). Allow a small empirical
+        # slack to stay robust to finite-sample variance.
+        assert coverage >= 0.88, (
+            f"empirical coverage {coverage:.3f} below nominal {1 - alpha:.2f}"
+        )
+
+    def test_conformal_predict_set_size_grows_with_q_hat(self):
+        import numpy as np
+
+        from agent_planning.calibration import conformal_predict
+
+        # Three classes, model gives a peak on class 1.
+        probs = np.array([
+            [0.1, 0.7, 0.2],
+            [0.3, 0.4, 0.3],
+        ])
+        small_q = 0.2  # threshold cutoff = 0.8
+        large_q = 0.7  # threshold cutoff = 0.3
+
+        small_sets = conformal_predict(probs, small_q)
+        large_sets = conformal_predict(probs, large_q)
+
+        # Larger q_hat = more permissive — sets at least as large.
+        for s, l in zip(small_sets, large_sets):
+            assert s.issubset(l)
+
+    # ── Regression band ───────────────────────────────────────────────
+
+    def test_conformal_predict_band_is_symmetric_around_point(self):
+        from agent_planning.calibration import conformal_predict_band
+
+        # Residuals roughly Gaussian; band should be symmetric.
+        residuals = [1.0, -1.2, 0.8, -0.9, 1.1, -1.0, 1.3, -1.4, 0.7, -0.8]
+        low, high = conformal_predict_band(
+            point_estimate=10.0,
+            calibration_residuals=residuals,
+            alpha=0.2,
+        )
+        midpoint = (low + high) / 2.0
+        assert abs(midpoint - 10.0) < 1e-9
+        assert high > low
+
+    def test_conformal_predict_band_widens_as_alpha_drops(self):
+        import numpy as np
+
+        from agent_planning.calibration import conformal_predict_band
+
+        rng = np.random.default_rng(4)
+        residuals = rng.normal(scale=1.5, size=200).tolist()
+
+        narrow = conformal_predict_band(0.0, residuals, alpha=0.5)
+        wide = conformal_predict_band(0.0, residuals, alpha=0.05)
+        # Lower miscoverage → wider band.
+        assert (wide[1] - wide[0]) > (narrow[1] - narrow[0])
+
+    def test_conformal_predict_band_empirical_coverage_on_holdout(self):
+        import numpy as np
+
+        from agent_planning.calibration import conformal_predict_band
+
+        # Simulate: true value drawn from N(point, 2.0); residuals
+        # from the calibration history; band claims to cover with
+        # probability 1 - alpha.
+        rng = np.random.default_rng(5)
+        scale = 2.0
+        point = 100.0
+        calibration_residuals = rng.normal(scale=scale, size=500)
+        alpha = 0.2
+
+        low, high = conformal_predict_band(point, calibration_residuals, alpha=alpha)
+
+        # Test on a fresh draw of 5000 new points from the same
+        # distribution. Empirical coverage should be near (1 - alpha)
+        # modulo finite-sample variance. Allow modest slack (3pp)
+        # below nominal — conformal coverage is a marginal guarantee
+        # on the calibration set, not a pointwise one on a held-out
+        # draw, and tightening this assertion makes the test flaky on
+        # different numpy RNG implementations.
+        new_values = point + rng.normal(scale=scale, size=5000)
+        covered = ((new_values >= low) & (new_values <= high)).mean()
+        assert covered >= 0.77, (
+            f"empirical band coverage {covered:.3f} too far below "
+            f"nominal {1 - alpha:.2f}"
+        )
