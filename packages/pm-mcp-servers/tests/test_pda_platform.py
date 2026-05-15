@@ -1024,3 +1024,352 @@ class TestBoardReportFallback:
             "Test risk for fallback report" in text
             or f"{project_id}-R001" in text
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5: Output-guardrail engine (issue #29 / A2)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestGuardrailEngine:
+    """Behavioural anchor for the deterministic output-guardrail engine.
+
+    Covers every verdict path (APPROVED / FLAGGED / REJECTED), the
+    audit-trail-records-every-evaluation invariant, the rule-condition
+    error path (records UNKNOWN, does not crash), and the wrapper's
+    behaviour for each verdict against a synthetic MCP handler.
+    """
+
+    # ── Pure engine: severity-to-verdict mapping ──────────────────────
+
+    def test_approved_when_no_rule_fires(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            Verdict,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [build_required_field_rule("verdict", severity=Severity.BLOCK)]
+        result = evaluate({"verdict": "GREEN"}, policy)
+        assert result.verdict == Verdict.APPROVED
+        assert result.triggered == []
+        assert len(result.evaluations) == 1
+        assert result.evaluations[0].violated is False
+
+    def test_flagged_when_only_warn_fires(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            Verdict,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [
+            build_required_field_rule("missing_field", severity=Severity.WARN),
+        ]
+        result = evaluate({"verdict": "GREEN"}, policy)
+        assert result.verdict == Verdict.FLAGGED
+        assert len(result.triggered) == 1
+        assert result.triggered[0].severity == Severity.WARN
+
+    def test_rejected_when_any_block_fires_even_with_warns(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            Verdict,
+            build_forbidden_phrase_rule,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [
+            build_required_field_rule("missing_field", severity=Severity.WARN),
+            build_forbidden_phrase_rule(
+                "narrative",
+                phrases=["100% certain"],
+                severity=Severity.BLOCK,
+            ),
+        ]
+        result = evaluate(
+            {"narrative": "We are 100% certain of the outcome."}, policy
+        )
+        assert result.verdict == Verdict.REJECTED
+        # Both rules fired — trail records both.
+        assert len(result.triggered) == 2
+
+    def test_info_severity_never_changes_verdict(self):
+        from pm_mcp_servers._guardrails import Rule, Severity, Verdict, evaluate
+
+        policy = [
+            Rule(
+                name="info_only",
+                description="Records context",
+                severity=Severity.INFO,
+                condition=lambda _: True,  # always "violated" → trail entry
+            )
+        ]
+        result = evaluate({}, policy)
+        assert result.verdict == Verdict.APPROVED
+        assert len(result.triggered) == 1
+        assert result.triggered[0].severity == Severity.INFO
+
+    # ── Audit-trail invariant ─────────────────────────────────────────
+
+    def test_audit_trail_records_every_rule_regardless_of_verdict(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_forbidden_phrase_rule,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [
+            build_required_field_rule("verdict", severity=Severity.BLOCK),
+            build_required_field_rule("missing_a", severity=Severity.WARN),
+            build_required_field_rule("missing_b", severity=Severity.WARN),
+            build_forbidden_phrase_rule(
+                "narrative",
+                phrases=["100% certain"],
+                severity=Severity.BLOCK,
+            ),
+        ]
+        # Clean output — none fire.
+        clean = evaluate(
+            {"verdict": "GREEN", "missing_a": 1, "missing_b": 2, "narrative": "ok"},
+            policy,
+        )
+        # Dirty output — all four fire.
+        dirty = evaluate({"narrative": "100% certain"}, policy)
+
+        # Both produce the same shape of trail — same number of rules
+        # evaluated, in the same order.
+        assert len(clean.evaluations) == len(dirty.evaluations) == 4
+        assert [e.rule_name for e in clean.evaluations] == [
+            e.rule_name for e in dirty.evaluations
+        ]
+
+    def test_condition_that_raises_records_unknown_and_continues(self):
+        from pm_mcp_servers._guardrails import (
+            Rule,
+            Severity,
+            Verdict,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        def boom(_: dict) -> bool:
+            raise RuntimeError("policy bug")
+
+        policy = [
+            Rule(
+                name="exploding_rule",
+                description="Should not break the engine",
+                severity=Severity.BLOCK,
+                condition=boom,
+            ),
+            build_required_field_rule("verdict", severity=Severity.BLOCK),
+        ]
+        result = evaluate({"verdict": "GREEN"}, policy)
+        # Verdict is APPROVED — boom did NOT trigger rejection.
+        assert result.verdict == Verdict.APPROVED
+        # The trail records UNKNOWN for the broken rule.
+        boom_entry = next(e for e in result.evaluations if e.rule_name == "exploding_rule")
+        assert boom_entry.severity == Severity.UNKNOWN
+        assert boom_entry.error == "RuntimeError"
+
+    # ── Range / allowed-values rule builders ──────────────────────────
+
+    def test_range_rule_fires_above_upper_bound(self):
+        from pm_mcp_servers._guardrails import Verdict, build_range_rule, evaluate
+
+        policy = [build_range_rule("confidence", lower=0.0, upper=1.0)]
+        assert evaluate({"confidence": 1.5}, policy).verdict == Verdict.REJECTED
+        assert evaluate({"confidence": 0.5}, policy).verdict == Verdict.APPROVED
+        # Missing/non-numeric also fires.
+        assert evaluate({"confidence": "not-a-number"}, policy).verdict == Verdict.REJECTED
+        assert evaluate({}, policy).verdict == Verdict.REJECTED
+
+    def test_allowed_values_rule(self):
+        from pm_mcp_servers._guardrails import Verdict, build_allowed_values_rule, evaluate
+
+        policy = [build_allowed_values_rule("verdict", {"GREEN", "AMBER", "RED"})]
+        assert evaluate({"verdict": "AMBER"}, policy).verdict == Verdict.APPROVED
+        assert evaluate({"verdict": "PURPLE"}, policy).verdict == Verdict.REJECTED
+        # Missing fires.
+        assert evaluate({}, policy).verdict == Verdict.REJECTED
+
+    def test_forbidden_phrase_rule_is_case_insensitive_by_default(self):
+        from pm_mcp_servers._guardrails import Verdict, build_forbidden_phrase_rule, evaluate
+
+        policy = [
+            build_forbidden_phrase_rule(
+                "narrative",
+                phrases=["100% certain", "guaranteed"],
+            )
+        ]
+        assert (
+            evaluate(
+                {"narrative": "Outcomes are 100% Certain"}, policy
+            ).verdict
+            == Verdict.REJECTED
+        )
+        assert (
+            evaluate(
+                {"narrative": "Risks managed proportionately."}, policy
+            ).verdict
+            == Verdict.APPROVED
+        )
+
+    # ── Wrapper: end-to-end against a synthetic MCP handler ───────────
+
+    async def test_wrapper_approved_returns_original_output_unchanged(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text=_json.dumps({"verdict": "GREEN"}))]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[build_required_field_rule("verdict", severity=Severity.BLOCK)],
+        )
+        result = await wrapped({})
+        # Same object identity — APPROVED passes the original through.
+        assert result[0].text == _json.dumps({"verdict": "GREEN"})
+        # No annotation added.
+        assert "_guardrail_flags" not in result[0].text
+
+    async def test_wrapper_flagged_adds_annotation_preserving_original_fields(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text=_json.dumps({"verdict": "GREEN"}))]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[
+                build_required_field_rule(
+                    "missing_field", severity=Severity.WARN
+                )
+            ],
+        )
+        result = await wrapped({})
+        payload = _json.loads(result[0].text)
+        # Original field preserved.
+        assert payload["verdict"] == "GREEN"
+        # Annotation present.
+        assert "_guardrail_flags" in payload
+        assert payload["_guardrail_flags"]["verdict"] == "FLAGGED"
+        assert len(payload["_guardrail_flags"]["triggered"]) == 1
+
+    async def test_wrapper_rejected_returns_error_json_not_original_output(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_forbidden_phrase_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [
+                TextContent(
+                    type="text",
+                    text=_json.dumps(
+                        {"narrative": "We are 100% certain this will succeed."}
+                    ),
+                )
+            ]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[
+                build_forbidden_phrase_rule(
+                    "narrative",
+                    phrases=["100% certain"],
+                    severity=Severity.BLOCK,
+                )
+            ],
+        )
+        result = await wrapped({})
+        payload = _json.loads(result[0].text)
+        # Original prose suppressed — hard fail-safe. The triggered
+        # rule's description may legitimately echo the forbidden token
+        # as metadata, but the original narrative sentence ("this will
+        # succeed") and the original dict's keys must not appear in
+        # the response.
+        assert "this will succeed" not in result[0].text
+        assert "narrative" not in payload  # original field absent
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        assert len(payload["triggered"]) == 1
+
+    async def test_wrapper_records_to_audit_chain_when_provided(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_data_tools.audit import AuditChain
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        chain = AuditChain()
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text=_json.dumps({"verdict": "GREEN"}))]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[build_required_field_rule("verdict", severity=Severity.BLOCK)],
+            audit_chain=chain,
+            action="TEST_GUARDRAIL",
+        )
+        await wrapped({})
+        await wrapped({})
+        # Two evaluations → two audit entries.
+        assert len(chain) == 2
+        assert chain.entries[0].decision == "APPROVED"
+        assert chain.entries[0].action == "TEST_GUARDRAIL"
+        # Chain still verifies after recording.
+        assert chain.verify().is_valid
+
+    async def test_wrapper_passes_through_non_json_text_unchanged(self):
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text="this is not JSON")]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[build_required_field_rule("verdict", severity=Severity.BLOCK)],
+        )
+        result = await wrapped({})
+        # Non-JSON output passes through untouched — engine has nothing
+        # to evaluate against an opaque blob.
+        assert result[0].text == "this is not JSON"
