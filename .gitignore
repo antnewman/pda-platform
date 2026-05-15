@@ -70,6 +70,11 @@ hackathon-local/
 # Internal docs (not for public repo)
 ASSUMPTION_DRIFT_PROMPT.md
 
+# Local gap-analysis build artefacts
+build_gap_analysis_docx.js
+verified-autonomy.txt
+.claude/scheduled_tasks.lock
+
 # Office temp files
 ~$*
 *.docx
