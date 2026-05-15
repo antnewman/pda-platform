@@ -1024,3 +1024,613 @@ class TestBoardReportFallback:
             "Test risk for fallback report" in text
             or f"{project_id}-R001" in text
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5: Output-guardrail engine (issue #29 / A2)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestGuardrailEngine:
+    """Behavioural anchor for the deterministic output-guardrail engine.
+
+    Covers every verdict path (APPROVED / FLAGGED / REJECTED), the
+    audit-trail-records-every-evaluation invariant, the rule-condition
+    error path (records UNKNOWN, does not crash), and the wrapper's
+    behaviour for each verdict against a synthetic MCP handler.
+    """
+
+    # ── Pure engine: severity-to-verdict mapping ──────────────────────
+
+    def test_approved_when_no_rule_fires(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            Verdict,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [build_required_field_rule("verdict", severity=Severity.BLOCK)]
+        result = evaluate({"verdict": "GREEN"}, policy)
+        assert result.verdict == Verdict.APPROVED
+        assert result.triggered == []
+        assert len(result.evaluations) == 1
+        assert result.evaluations[0].violated is False
+
+    def test_flagged_when_only_warn_fires(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            Verdict,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [
+            build_required_field_rule("missing_field", severity=Severity.WARN),
+        ]
+        result = evaluate({"verdict": "GREEN"}, policy)
+        assert result.verdict == Verdict.FLAGGED
+        assert len(result.triggered) == 1
+        assert result.triggered[0].severity == Severity.WARN
+
+    def test_rejected_when_any_block_fires_even_with_warns(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            Verdict,
+            build_forbidden_phrase_rule,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [
+            build_required_field_rule("missing_field", severity=Severity.WARN),
+            build_forbidden_phrase_rule(
+                "narrative",
+                phrases=["100% certain"],
+                severity=Severity.BLOCK,
+            ),
+        ]
+        result = evaluate(
+            {"narrative": "We are 100% certain of the outcome."}, policy
+        )
+        assert result.verdict == Verdict.REJECTED
+        # Both rules fired — trail records both.
+        assert len(result.triggered) == 2
+
+    def test_info_severity_never_changes_verdict(self):
+        from pm_mcp_servers._guardrails import Rule, Severity, Verdict, evaluate
+
+        policy = [
+            Rule(
+                name="info_only",
+                description="Records context",
+                severity=Severity.INFO,
+                condition=lambda _: True,  # always "violated" → trail entry
+            )
+        ]
+        result = evaluate({}, policy)
+        assert result.verdict == Verdict.APPROVED
+        assert len(result.triggered) == 1
+        assert result.triggered[0].severity == Severity.INFO
+
+    # ── Audit-trail invariant ─────────────────────────────────────────
+
+    def test_audit_trail_records_every_rule_regardless_of_verdict(self):
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_forbidden_phrase_rule,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        policy = [
+            build_required_field_rule("verdict", severity=Severity.BLOCK),
+            build_required_field_rule("missing_a", severity=Severity.WARN),
+            build_required_field_rule("missing_b", severity=Severity.WARN),
+            build_forbidden_phrase_rule(
+                "narrative",
+                phrases=["100% certain"],
+                severity=Severity.BLOCK,
+            ),
+        ]
+        # Clean output — none fire.
+        clean = evaluate(
+            {"verdict": "GREEN", "missing_a": 1, "missing_b": 2, "narrative": "ok"},
+            policy,
+        )
+        # Dirty output — all four fire.
+        dirty = evaluate({"narrative": "100% certain"}, policy)
+
+        # Both produce the same shape of trail — same number of rules
+        # evaluated, in the same order.
+        assert len(clean.evaluations) == len(dirty.evaluations) == 4
+        assert [e.rule_name for e in clean.evaluations] == [
+            e.rule_name for e in dirty.evaluations
+        ]
+
+    def test_condition_that_raises_records_unknown_and_continues(self):
+        from pm_mcp_servers._guardrails import (
+            Rule,
+            Severity,
+            Verdict,
+            build_required_field_rule,
+            evaluate,
+        )
+
+        def boom(_: dict) -> bool:
+            raise RuntimeError("policy bug")
+
+        policy = [
+            Rule(
+                name="exploding_rule",
+                description="Should not break the engine",
+                severity=Severity.BLOCK,
+                condition=boom,
+            ),
+            build_required_field_rule("verdict", severity=Severity.BLOCK),
+        ]
+        result = evaluate({"verdict": "GREEN"}, policy)
+        # Verdict is APPROVED — boom did NOT trigger rejection.
+        assert result.verdict == Verdict.APPROVED
+        # The trail records UNKNOWN for the broken rule.
+        boom_entry = next(e for e in result.evaluations if e.rule_name == "exploding_rule")
+        assert boom_entry.severity == Severity.UNKNOWN
+        assert boom_entry.error == "RuntimeError"
+
+    # ── Range / allowed-values rule builders ──────────────────────────
+
+    def test_range_rule_fires_above_upper_bound(self):
+        from pm_mcp_servers._guardrails import Verdict, build_range_rule, evaluate
+
+        policy = [build_range_rule("confidence", lower=0.0, upper=1.0)]
+        assert evaluate({"confidence": 1.5}, policy).verdict == Verdict.REJECTED
+        assert evaluate({"confidence": 0.5}, policy).verdict == Verdict.APPROVED
+        # Missing/non-numeric also fires.
+        assert evaluate({"confidence": "not-a-number"}, policy).verdict == Verdict.REJECTED
+        assert evaluate({}, policy).verdict == Verdict.REJECTED
+
+    def test_allowed_values_rule(self):
+        from pm_mcp_servers._guardrails import Verdict, build_allowed_values_rule, evaluate
+
+        policy = [build_allowed_values_rule("verdict", {"GREEN", "AMBER", "RED"})]
+        assert evaluate({"verdict": "AMBER"}, policy).verdict == Verdict.APPROVED
+        assert evaluate({"verdict": "PURPLE"}, policy).verdict == Verdict.REJECTED
+        # Missing fires.
+        assert evaluate({}, policy).verdict == Verdict.REJECTED
+
+    def test_forbidden_phrase_rule_is_case_insensitive_by_default(self):
+        from pm_mcp_servers._guardrails import Verdict, build_forbidden_phrase_rule, evaluate
+
+        policy = [
+            build_forbidden_phrase_rule(
+                "narrative",
+                phrases=["100% certain", "guaranteed"],
+            )
+        ]
+        assert (
+            evaluate(
+                {"narrative": "Outcomes are 100% Certain"}, policy
+            ).verdict
+            == Verdict.REJECTED
+        )
+        assert (
+            evaluate(
+                {"narrative": "Risks managed proportionately."}, policy
+            ).verdict
+            == Verdict.APPROVED
+        )
+
+    # ── Wrapper: end-to-end against a synthetic MCP handler ───────────
+
+    async def test_wrapper_approved_returns_original_output_unchanged(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text=_json.dumps({"verdict": "GREEN"}))]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[build_required_field_rule("verdict", severity=Severity.BLOCK)],
+        )
+        result = await wrapped({})
+        # Same object identity — APPROVED passes the original through.
+        assert result[0].text == _json.dumps({"verdict": "GREEN"})
+        # No annotation added.
+        assert "_guardrail_flags" not in result[0].text
+
+    async def test_wrapper_flagged_adds_annotation_preserving_original_fields(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text=_json.dumps({"verdict": "GREEN"}))]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[
+                build_required_field_rule(
+                    "missing_field", severity=Severity.WARN
+                )
+            ],
+        )
+        result = await wrapped({})
+        payload = _json.loads(result[0].text)
+        # Original field preserved.
+        assert payload["verdict"] == "GREEN"
+        # Annotation present.
+        assert "_guardrail_flags" in payload
+        assert payload["_guardrail_flags"]["verdict"] == "FLAGGED"
+        assert len(payload["_guardrail_flags"]["triggered"]) == 1
+
+    async def test_wrapper_rejected_returns_error_json_not_original_output(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_forbidden_phrase_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [
+                TextContent(
+                    type="text",
+                    text=_json.dumps(
+                        {"narrative": "We are 100% certain this will succeed."}
+                    ),
+                )
+            ]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[
+                build_forbidden_phrase_rule(
+                    "narrative",
+                    phrases=["100% certain"],
+                    severity=Severity.BLOCK,
+                )
+            ],
+        )
+        result = await wrapped({})
+        payload = _json.loads(result[0].text)
+        # Original prose suppressed — hard fail-safe. The triggered
+        # rule's description may legitimately echo the forbidden token
+        # as metadata, but the original narrative sentence ("this will
+        # succeed") and the original dict's keys must not appear in
+        # the response.
+        assert "this will succeed" not in result[0].text
+        assert "narrative" not in payload  # original field absent
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        assert len(payload["triggered"]) == 1
+
+    async def test_wrapper_records_to_audit_chain_when_provided(self):
+        import json as _json
+
+        from mcp.types import TextContent
+
+        from pm_data_tools.audit import AuditChain
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        chain = AuditChain()
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text=_json.dumps({"verdict": "GREEN"}))]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[build_required_field_rule("verdict", severity=Severity.BLOCK)],
+            audit_chain=chain,
+            action="TEST_GUARDRAIL",
+        )
+        await wrapped({})
+        await wrapped({})
+        # Two evaluations → two audit entries.
+        assert len(chain) == 2
+        assert chain.entries[0].decision == "APPROVED"
+        assert chain.entries[0].action == "TEST_GUARDRAIL"
+        # Chain still verifies after recording.
+        assert chain.verify().is_valid
+
+    async def test_wrapper_passes_through_non_json_text_unchanged(self):
+        from mcp.types import TextContent
+
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_required_field_rule,
+            wrap_tool_output,
+        )
+
+        async def fake_handler(_args):
+            return [TextContent(type="text", text="this is not JSON")]
+
+        wrapped = wrap_tool_output(
+            fake_handler,
+            policy=[build_required_field_rule("verdict", severity=Severity.BLOCK)],
+        )
+        result = await wrapped({})
+        # Non-JSON output passes through untouched — engine has nothing
+        # to evaluate against an opaque blob.
+        assert result[0].text == "this is not JSON"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 4: Calibration and conformal prediction (issue #31 / A4)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestCalibrationAndConformal:
+    """Behavioural anchor for L4 calibration and conformal-prediction primitives.
+
+    Anchors the paper's headline tests:
+    - ECE-on-perfectly-calibrated-data-is-zero
+    - temperature-scaling-reduces-ECE on a synthetic overconfident classifier
+    - empirical-coverage-meets-guarantee on a synthetic split-conformal run
+      at alpha=0.1 (90% nominal → at least ~88% empirical)
+
+    Plus the regression-band variant used by the Monte Carlo / benchmark
+    pipelines.
+    """
+
+    # ── ECE ───────────────────────────────────────────────────────────
+
+    def test_ece_perfectly_calibrated_classifier_is_zero(self):
+        import numpy as np
+
+        from agent_planning.calibration import compute_ece
+
+        # Synthetic: every prediction has confidence == accuracy. Build
+        # two cohorts — one with confidence 0.9 and accuracy 0.9; one
+        # with confidence 1.0 and accuracy 1.0.
+        rng = np.random.default_rng(0)
+        n_per = 500
+
+        # Cohort 1: top-class prob ~ 0.9, correct 90% of the time.
+        cohort1_probs = np.full((n_per, 2), 0.0)
+        cohort1_probs[:, 1] = 0.9
+        cohort1_probs[:, 0] = 0.1
+        cohort1_correct_mask = rng.random(n_per) < 0.9
+        cohort1_y = np.where(cohort1_correct_mask, 1, 0)
+
+        # Cohort 2: top-class prob 1.0, always correct.
+        cohort2_probs = np.full((n_per, 2), 0.0)
+        cohort2_probs[:, 1] = 1.0
+        cohort2_probs[:, 0] = 0.0
+        cohort2_y = np.ones(n_per, dtype=int)
+
+        y_true = np.concatenate([cohort1_y, cohort2_y])
+        y_probs = np.concatenate([cohort1_probs, cohort2_probs])
+
+        result = compute_ece(y_true, y_probs, n_bins=15)
+        # With this size of synthetic data, the empirical accuracy in
+        # the 0.9 cohort is within sampling noise of 0.9; the gap is
+        # well below 0.03. The paper's "is zero" reference is the
+        # population-level statement; we use a tolerant assertion.
+        assert result.ece < 0.03
+        assert result.n_samples == 2 * n_per
+
+    def test_ece_uncalibrated_classifier_has_nonzero_ece(self):
+        import numpy as np
+
+        from agent_planning.calibration import compute_ece
+
+        rng = np.random.default_rng(1)
+        n = 1000
+        # Severely overconfident: always predicts confidence 0.95 but
+        # only correct 60% of the time.
+        probs = np.full((n, 2), 0.0)
+        probs[:, 1] = 0.95
+        probs[:, 0] = 0.05
+        correct = rng.random(n) < 0.6
+        y_true = np.where(correct, 1, 0)
+
+        result = compute_ece(y_true, probs, n_bins=15)
+        # ECE should be close to |0.95 - 0.6| = 0.35.
+        assert result.ece > 0.3
+
+    # ── Temperature scaling ───────────────────────────────────────────
+
+    def test_temperature_scaling_reduces_ece_on_overconfident_classifier(self):
+        import numpy as np
+
+        from agent_planning.calibration import (
+            apply_temperature_scaling,
+            compute_ece,
+            find_temperature,
+        )
+
+        rng = np.random.default_rng(2)
+        n = 3000
+        n_classes = 4
+
+        # Build a well-calibrated logit/label pair: labels sampled FROM
+        # the softmax of the soft logits, so the well-calibrated
+        # softmax probabilities truly match the empirical class
+        # distribution per row.
+        logits_soft = rng.normal(scale=1.5, size=(n, n_classes))
+        soft_probs = apply_temperature_scaling(logits_soft, temperature=1.0)
+        # Sample one label per row from its probability vector.
+        uniforms = rng.random(n)
+        cum = np.cumsum(soft_probs, axis=1)
+        y_true = (uniforms[:, None] < cum).argmax(axis=1)
+
+        # Now make the model overconfident by scaling the logits by
+        # K > 1. The softmax of K·logits is sharper than soft_probs —
+        # so the predicted confidence exceeds the true accuracy.
+        K = 4.0
+        logits_overconf = logits_soft * K
+
+        raw_probs = apply_temperature_scaling(logits_overconf, temperature=1.0)
+        ece_before = compute_ece(y_true, raw_probs, n_bins=15).ece
+
+        # Fit temperature on this calibration set. The minimiser
+        # should find T close to K = 4.0, undoing the overconfidence.
+        T = find_temperature(logits_overconf, y_true)
+
+        scaled_probs = apply_temperature_scaling(logits_overconf, temperature=T)
+        ece_after = compute_ece(y_true, scaled_probs, n_bins=15).ece
+
+        # Overconfident classifiers need T > 1 to soften. Test the
+        # direction of the fix and the materiality of the gain.
+        assert T > 1.0, f"expected T > 1 for overconfident classifier; got {T}"
+        assert ece_after < ece_before, (
+            f"temperature scaling failed to reduce ECE: "
+            f"before={ece_before:.4f}, after={ece_after:.4f}"
+        )
+        # The corrected ECE should be materially lower (loose bound).
+        assert ece_after < 0.5 * ece_before
+
+    def test_apply_temperature_scaling_at_T_one_is_softmax(self):
+        import numpy as np
+
+        from agent_planning.calibration import apply_temperature_scaling
+
+        logits = np.array([[1.0, 2.0, 3.0], [0.0, 0.0, 0.0]])
+        probs = apply_temperature_scaling(logits, temperature=1.0)
+        # Each row sums to 1.
+        assert np.allclose(probs.sum(axis=1), 1.0)
+        # T=1.0 reproduces softmax; row 2 is uniform.
+        assert np.allclose(probs[1], [1 / 3, 1 / 3, 1 / 3])
+
+    # ── Split conformal prediction ────────────────────────────────────
+
+    def test_empirical_coverage_meets_guarantee_alpha_01(self):
+        """Paper's headline test: 90% nominal → at least ~88% empirical."""
+        import numpy as np
+
+        from agent_planning.calibration import (
+            calibrate_conformal,
+            conformal_predict,
+            evaluate_coverage,
+        )
+
+        rng = np.random.default_rng(3)
+        n_total = 2000
+        n_classes = 5
+        alpha = 0.1
+
+        # Synthetic noisy classifier: probabilities sampled from
+        # Dirichlet with a mode peaked on the true class, but
+        # severely under-calibrated.
+        y_true = rng.integers(0, n_classes, size=n_total)
+        probs = np.empty((n_total, n_classes))
+        for i in range(n_total):
+            base = np.full(n_classes, 0.2)
+            base[y_true[i]] = 2.0  # peak on the true class
+            probs[i] = rng.dirichlet(base)
+
+        # Split into calibration and test sets.
+        split = n_total // 2
+        y_cal, y_test = y_true[:split], y_true[split:]
+        probs_cal, probs_test = probs[:split], probs[split:]
+
+        q_hat = calibrate_conformal(y_cal, probs_cal, alpha=alpha)
+        prediction_sets = conformal_predict(probs_test, q_hat)
+        coverage = evaluate_coverage(y_test, prediction_sets)
+
+        # Marginal coverage guarantee under exchangeability:
+        # P(y in C) >= 1 - alpha (here 0.9). Allow a small empirical
+        # slack to stay robust to finite-sample variance.
+        assert coverage >= 0.88, (
+            f"empirical coverage {coverage:.3f} below nominal {1 - alpha:.2f}"
+        )
+
+    def test_conformal_predict_set_size_grows_with_q_hat(self):
+        import numpy as np
+
+        from agent_planning.calibration import conformal_predict
+
+        # Three classes, model gives a peak on class 1.
+        probs = np.array([
+            [0.1, 0.7, 0.2],
+            [0.3, 0.4, 0.3],
+        ])
+        small_q = 0.2  # threshold cutoff = 0.8
+        large_q = 0.7  # threshold cutoff = 0.3
+
+        small_sets = conformal_predict(probs, small_q)
+        large_sets = conformal_predict(probs, large_q)
+
+        # Larger q_hat = more permissive — sets at least as large.
+        for s, l in zip(small_sets, large_sets):
+            assert s.issubset(l)
+
+    # ── Regression band ───────────────────────────────────────────────
+
+    def test_conformal_predict_band_is_symmetric_around_point(self):
+        from agent_planning.calibration import conformal_predict_band
+
+        # Residuals roughly Gaussian; band should be symmetric.
+        residuals = [1.0, -1.2, 0.8, -0.9, 1.1, -1.0, 1.3, -1.4, 0.7, -0.8]
+        low, high = conformal_predict_band(
+            point_estimate=10.0,
+            calibration_residuals=residuals,
+            alpha=0.2,
+        )
+        midpoint = (low + high) / 2.0
+        assert abs(midpoint - 10.0) < 1e-9
+        assert high > low
+
+    def test_conformal_predict_band_widens_as_alpha_drops(self):
+        import numpy as np
+
+        from agent_planning.calibration import conformal_predict_band
+
+        rng = np.random.default_rng(4)
+        residuals = rng.normal(scale=1.5, size=200).tolist()
+
+        narrow = conformal_predict_band(0.0, residuals, alpha=0.5)
+        wide = conformal_predict_band(0.0, residuals, alpha=0.05)
+        # Lower miscoverage → wider band.
+        assert (wide[1] - wide[0]) > (narrow[1] - narrow[0])
+
+    def test_conformal_predict_band_empirical_coverage_on_holdout(self):
+        import numpy as np
+
+        from agent_planning.calibration import conformal_predict_band
+
+        # Simulate: true value drawn from N(point, 2.0); residuals
+        # from the calibration history; band claims to cover with
+        # probability 1 - alpha.
+        rng = np.random.default_rng(5)
+        scale = 2.0
+        point = 100.0
+        calibration_residuals = rng.normal(scale=scale, size=500)
+        alpha = 0.2
+
+        low, high = conformal_predict_band(point, calibration_residuals, alpha=alpha)
+
+        # Test on a fresh draw of 5000 new points from the same
+        # distribution. Empirical coverage should be near (1 - alpha)
+        # modulo finite-sample variance. Allow modest slack (3pp)
+        # below nominal — conformal coverage is a marginal guarantee
+        # on the calibration set, not a pointwise one on a held-out
+        # draw, and tightening this assertion makes the test flaky on
+        # different numpy RNG implementations.
+        new_values = point + rng.normal(scale=scale, size=5000)
+        covered = ((new_values >= low) & (new_values <= high)).mean()
+        assert covered >= 0.77, (
+            f"empirical band coverage {covered:.3f} too far below "
+            f"nominal {1 - alpha:.2f}"
+        )
