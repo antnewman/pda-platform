@@ -18,7 +18,283 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._groundedness import compute_groundedness
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain
+# ─────────────────────────────────────────────────────────────────────────
+# All five generate_* handlers in pm-reporting append to the
+# `pm_reporting` chain. The recorded entry captures the L5 guardrail
+# verdict that the document ultimately received — so the chain answers
+# "was this document approved, flagged, or rejected at L5?" without
+# storing the prose itself.
+
+_AUDIT_MODULE = "pm_reporting"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+
+
+def _classify_l5_verdict_from_payload(text: str) -> str:
+    """Inspect a final tool response payload and return the L5 verdict.
+
+    Markdown responses without a JSON wrapper carry no L5 flag (they
+    passed APPROVED). JSON responses with `error == "guardrail_rejected"`
+    are REJECTED. A JSON payload containing a `_guardrail_flags` field
+    is FLAGGED. This is a thin classifier — the caller has already
+    routed the document through `_apply_document_guardrail`, so the
+    classification is deterministic from the response shape.
+    """
+    if not text or not text.startswith("{"):
+        return "APPROVED"
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return "APPROVED"
+    if isinstance(payload, dict):
+        if payload.get("error") == "guardrail_rejected":
+            return "REJECTED"
+        if "_guardrail_flags" in payload:
+            return "FLAGGED"
+    return "APPROVED"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness checking for AI-authored documents
+# ─────────────────────────────────────────────────────────────────────────
+# After an AI-authored document is generated, run it through the
+# token-overlap groundedness checker and attach the result to the
+# response. For markdown documents this is appended as a visible
+# footer so the consumer (and any reviewer) sees the groundedness
+# verdict alongside the prose. For JSON documents the result is added
+# as a ``_groundedness`` field.
+#
+# The check is purely informational — it does NOT gate the response.
+# That is the L5 layer's job. L6 surfaces a trust signal: the consumer
+# can see how well the AI's prose is supported by the underlying data.
+
+
+def _build_groundedness_sources(
+    project_data: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Turn the project_data dict from ``_gather_project_data`` into a
+    list of source documents for :func:`compute_groundedness`.
+
+    Each top-level key becomes one source with that key as ``id`` and
+    the JSON-serialised value as ``content``. Sources with empty or
+    error-string values are skipped — they would contribute zero
+    coverage.
+    """
+    sources: list[dict[str, Any]] = []
+    if not project_data:
+        return sources
+    for key, value in project_data.items():
+        if not value:
+            continue
+        if isinstance(value, str) and value.startswith("[unavailable:"):
+            continue
+        sources.append(
+            {
+                "id": str(key),
+                "content": json.dumps(value, default=str),
+            }
+        )
+    return sources
+
+
+def _format_groundedness_footer(result_dict: dict[str, Any]) -> str:
+    """Build the visible markdown footer carrying the groundedness verdict.
+
+    Designed to be machine-readable (the dict is JSON-embedded in an
+    HTML comment) and human-readable (the score + verdict + top
+    ungrounded terms are shown as italic text). The HTML-comment block
+    is what an Evidence Engine / UDS consumer parses for the
+    structured fields; the italic line is what a board reviewer sees.
+    """
+    score = result_dict.get("overall_score", 0.0)
+    verdict = result_dict.get("verdict", "UNGROUNDED")
+    terms = result_dict.get("ungrounded_terms", []) or []
+    terms_preview = ", ".join(terms[:8])
+    if len(terms) > 8:
+        terms_preview += f", … (+{len(terms) - 8} more)"
+    if not terms_preview:
+        terms_preview = "(none)"
+    human_line = (
+        f"*Groundedness: {score:.2f} ({verdict}). "
+        f"Ungrounded terms: {terms_preview}*"
+    )
+    machine_block = (
+        "<!-- _groundedness: "
+        + json.dumps(result_dict, default=str)
+        + " -->"
+    )
+    return f"\n\n---\n{human_line}\n\n{machine_block}\n"
+
+
+def _attach_groundedness_to_markdown(
+    document: str,
+    sources: list[dict[str, Any]],
+    query: str | None = None,
+) -> str:
+    """Append a groundedness footer to a markdown document.
+
+    Returns the document with the footer appended. If ``sources`` is
+    empty, falls back to a footer that records ``UNGROUNDED — no
+    source data`` rather than skipping the annotation entirely (so
+    the absence of grounding is visible rather than implicit).
+    """
+    if not sources:
+        return (
+            document
+            + "\n\n---\n*Groundedness: not computed — no source data "
+            "available from the store at generation time.*\n"
+        )
+    result = compute_groundedness(document, sources, query=query)
+    gnd_dict = result.to_dict()
+    quality = derive_quality_from_groundedness(gnd_dict)
+    # Stash the quality dict inside the same HTML-comment block as the
+    # groundedness payload so a single block carries both — Evidence
+    # Engine and UDS consumers parse the comment once.
+    combined: dict[str, Any] = dict(gnd_dict)
+    combined["_quality"] = quality
+    return document + _format_groundedness_footer(combined)
+
 server = Server("pm-reporting")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policies for AI-authored governance documents
+# ─────────────────────────────────────────────────────────────────────────
+# Each AI-authored tool in pm-reporting has its own policy because the
+# definition of "forbidden" depends on the document's audience and
+# tolerated style. Common across all of them: reject outputs that
+# overclaim certainty ("100% certain", "guaranteed", "zero risk") or
+# leak scaffolding ("INSERT NARRATIVE HERE", "TODO", "TBD",
+# "[placeholder]"). Phrase matches are case-insensitive substrings.
+# The regression tests assert the *behaviour* (rejection occurs, prose
+# is suppressed) rather than the specific phrase list, so phrases can
+# be added without test churn.
+
+# Phrases shared by all governance-document policies.
+_COMMON_OVERCLAIM_PHRASES = (
+    "100% certain",
+    "100 % certain",
+    "absolutely guaranteed",
+    "no risk whatsoever",
+    "zero risk",
+)
+
+_COMMON_TEMPLATE_LEAK_PHRASES = (
+    "INSERT NARRATIVE HERE",
+    "INSERT FIGURE HERE",
+    "TODO",
+    "TBD",
+    "[placeholder]",
+)
+
+# Board exception report — minister/parliament-facing. Strictest set.
+_BOARD_REPORT_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[*_COMMON_OVERCLAIM_PHRASES, *_COMMON_TEMPLATE_LEAK_PHRASES],
+        severity=Severity.BLOCK,
+    ),
+]
+
+# Gate Review Summary — IPA-format, submitted to gate-review boards.
+# Adds gate-specific failure modes (rating fabrication, evidence
+# overclaim) to the shared base.
+_GATE_REVIEW_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            *_COMMON_OVERCLAIM_PHRASES,
+            *_COMMON_TEMPLATE_LEAK_PHRASES,
+            # Gate-review-specific: a reviewer should never assert that
+            # an assurance condition is "always" met — that is the kind
+            # of phrasing the IPA challenges. Catch it deterministically.
+            "always met",
+            "definitely deliver",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+# Portfolio Summary — portfolio-committee-facing rollup across many
+# projects. The systemic-risk paragraph is the highest-stakes section;
+# the policy rejects overclaim and template leaks just like the board
+# report.
+_PORTFOLIO_SUMMARY_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            *_COMMON_OVERCLAIM_PHRASES,
+            *_COMMON_TEMPLATE_LEAK_PHRASES,
+            # Portfolio-specific: a summary that asserts "all green" or
+            # "no concerns" across a portfolio is almost always either a
+            # template default or an LLM evasion. Treat as block.
+            "all green",
+            "no concerns identified",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+# PIR Template — Post-Implementation Review. The PIR deliberately
+# embeds `[PLACEHOLDER]` markers throughout (sign-off names, outstanding
+# actions, etc.) so the common `[placeholder]` phrase MUST be excluded
+# from this policy or every PIR would falsely reject. The genuine
+# template-leak failure modes here are differently-shaped: the LLM
+# leaving scaffolding instructions visible, or emitting "INSERT PIR
+# SECTION HERE" rather than substantive content.
+_PIR_TEMPLATE_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            *_COMMON_OVERCLAIM_PHRASES,
+            # Deliberately NOT inheriting _COMMON_TEMPLATE_LEAK_PHRASES
+            # because the PIR uses `[PLACEHOLDER]` markers by design.
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "INSERT PIR SECTION HERE",
+            "TODO before submission",
+            "TBD before submission",
+            # PIR-specific failure mode: the LLM hallucinating a
+            # success when the data shows otherwise.
+            "all benefits realised",
+            "all benefits delivered",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
 
 GATE_NAMES = {
     0: "Strategic Assessment",
@@ -554,7 +830,22 @@ If data is missing for a dimension, note the gap rather than assuming performanc
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
-    return [TextContent(type="text", text=document)]
+    document = _attach_groundedness_to_markdown(
+        document,
+        _build_groundedness_sources(project_data),
+        query=prompt,
+    )
+    return _apply_document_guardrail(
+        document,
+        _GATE_REVIEW_POLICY,
+        "gate review summary",
+        action="generate_gate_review_summary",
+        audit_input={
+            "project_id": project_id,
+            "gate_number": gate_number,
+            "reviewer_name": reviewer_name,
+        },
+    )
 
 
 async def _generate_sro_dashboard(arguments: dict[str, Any]) -> list[TextContent]:
@@ -712,16 +1003,32 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
                      "Load project data using pm-data, pm-risk, pm-brm, and pm-financial tools first."
         }))]
 
-    # If the API key is missing, return a deterministic evidence-only board
-    # report rather than failing. Same graceful-fallback pattern as
-    # pm_assumptions/_fetch_ons uses for failed external API calls: same
-    # output shape, clearly-labelled fallback, includes the reason.
+    # If the API key is missing, fall through with the deterministic
+    # evidence-only board report (still routed through the L5 guardrail
+    # below). Same graceful-fallback pattern as pm_assumptions/_fetch_ons
+    # uses for failed external API calls: same output shape, clearly-
+    # labelled fallback, includes the reason.
+    sources = _build_groundedness_sources(project_data)
+
+    audit_input_summary = {
+        "project_id": project_id,
+        "reporting_period": reporting_period,
+    }
+
     client = _get_anthropic_client()
     if client is None:
         document = _compose_evidence_only_board_report(
             project_id, reporting_period, project_data
         )
-        return [TextContent(type="text", text=document)]
+        # L6 first (annotate), then L5 (gate). If L5 rejects, the
+        # annotated document is suppressed in favour of the error JSON.
+        document = _attach_groundedness_to_markdown(
+            document, sources, query="evidence-only board exception report"
+        )
+        return _apply_board_report_guardrail(
+            document,
+            audit_input={**audit_input_summary, "path": "fallback"},
+        )
 
     today = date.today().isoformat()
     data_summary = json.dumps(project_data, indent=2, default=str)
@@ -772,7 +1079,128 @@ Rules:
             project_id, reporting_period, project_data
         )
 
+    document = _attach_groundedness_to_markdown(document, sources, query=prompt)
+    return _apply_board_report_guardrail(
+        document,
+        audit_input={**audit_input_summary, "path": "claude"},
+    )
+
+
+def _apply_document_guardrail(
+    document: str,
+    policy: list,
+    document_kind: str,
+    *,
+    action: str | None = None,
+    audit_input: dict | None = None,
+) -> list[TextContent]:
+    """Apply an L5 deterministic guardrail policy to an AI-authored document.
+
+    APPROVED: pass through unchanged as markdown.
+    FLAGGED: prepend a guardrail-notice block but keep the document.
+    REJECTED: replace the document with structured error JSON so a
+        downstream consumer cannot accidentally render an output that
+        contains forbidden phrases (hard fail-safe).
+
+    Also records an L8 audit-chain entry with the L5 verdict, so the
+    chain answers "what verdict did this document receive?" without
+    storing the prose. The recorded entry's ``action`` defaults to
+    ``document_kind`` but callers can pass an explicit ``action``
+    matching the originating tool name (e.g. ``"generate_gate_review_summary"``).
+
+    Args:
+        document: The generated markdown text.
+        policy: List of :class:`Rule` to evaluate against
+            ``{"document": document}``.
+        document_kind: Short human-readable name used in the rejection
+            error message (e.g. ``"board exception report"``,
+            ``"gate review summary"``).
+        action: Optional explicit action label for the audit entry.
+            When ``None``, ``document_kind`` is used.
+        audit_input: Optional input summary for the audit entry
+            (e.g. ``{"project_id": "PROJ-001"}``). When ``None``,
+            recorded as an empty dict.
+    """
+    result = evaluate({"document": document}, policy)
+    audit_action = action or document_kind
+    audit_input_summary: dict = audit_input or {}
+    if result.verdict == Verdict.REJECTED:
+        _safe_record_decision(
+            input_data=audit_input_summary,
+            output_data={
+                "triggered_count": len(result.triggered),
+                "triggered_rules": [e.rule_name for e in result.triggered],
+            },
+            decision="REJECTED",
+            action=audit_action,
+            metadata={"document_kind": document_kind},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": result.verdict.value,
+                        "message": (
+                            f"Generated {document_kind} contained one or more "
+                            "phrases forbidden by the L5 deterministic policy. "
+                            "Inspect `triggered` for the failing rules; the "
+                            "original prose has been suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in result.triggered],
+                        "evaluations": [e.to_dict() for e in result.evaluations],
+                    }
+                ),
+            )
+        ]
+    if result.verdict == Verdict.FLAGGED:
+        notice_lines = [
+            f"> ⚠️ **L5 guardrail flagged this {document_kind}.** Reviewer attention required.",
+            ">",
+        ]
+        for triggered in result.triggered:
+            notice_lines.append(
+                f"> - {triggered.rule_name}: {triggered.message}"
+            )
+        document = "\n".join(notice_lines) + "\n\n" + document
+        _safe_record_decision(
+            input_data=audit_input_summary,
+            output_data={
+                "triggered_count": len(result.triggered),
+                "triggered_rules": [e.rule_name for e in result.triggered],
+            },
+            decision="FLAGGED",
+            action=audit_action,
+            metadata={"document_kind": document_kind},
+        )
+    else:
+        _safe_record_decision(
+            input_data=audit_input_summary,
+            output_data={"triggered_count": 0},
+            decision="APPROVED",
+            action=audit_action,
+            metadata={"document_kind": document_kind},
+        )
     return [TextContent(type="text", text=document)]
+
+
+# Backward-compatible alias for the board exception report path.
+def _apply_board_report_guardrail(
+    document: str,
+    *,
+    audit_input: dict | None = None,
+) -> list[TextContent]:
+    """Apply the board-report guardrail policy. Thin wrapper around the
+    generalised :func:`_apply_document_guardrail` that fixes the action
+    label to ``generate_board_exception_report`` for the audit chain."""
+    return _apply_document_guardrail(
+        document,
+        _BOARD_REPORT_POLICY,
+        "board exception report",
+        action="generate_board_exception_report",
+        audit_input=audit_input or {},
+    )
 
 
 async def _generate_portfolio_summary(arguments: dict[str, Any]) -> list[TextContent]:
@@ -884,7 +1312,31 @@ Be specific. If DCA ratings are mostly AMBER, say so. Identify systemic issues h
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
-    return [TextContent(type="text", text=document)]
+    # L6: sources span every project's data plus the per-project
+    # scorecard metrics. One source per project keeps the per-source
+    # citation scores informative — a reviewer can see which project's
+    # data each fragment of the narrative is supported by.
+    portfolio_sources: list[dict[str, Any]] = [
+        {"id": "per_project_scorecard", "content": project_table},
+    ]
+    for pid, pdata in all_data.items():
+        portfolio_sources.append(
+            {"id": f"project_{pid}", "content": json.dumps(pdata, default=str)}
+        )
+    document = _attach_groundedness_to_markdown(
+        document, portfolio_sources, query=prompt,
+    )
+    return _apply_document_guardrail(
+        document,
+        _PORTFOLIO_SUMMARY_POLICY,
+        "portfolio summary",
+        action="generate_portfolio_summary",
+        audit_input={
+            "portfolio_name": portfolio_name,
+            "project_ids": project_ids,
+            "project_count": len(project_ids),
+        },
+    )
 
 
 async def _generate_pir_template(arguments: dict[str, Any]) -> list[TextContent]:
@@ -994,7 +1446,21 @@ Flag where data gaps exist rather than inventing numbers."""
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
-    return [TextContent(type="text", text=document)]
+    document = _attach_groundedness_to_markdown(
+        document,
+        _build_groundedness_sources(project_data),
+        query=prompt,
+    )
+    return _apply_document_guardrail(
+        document,
+        _PIR_TEMPLATE_POLICY,
+        "PIR template",
+        action="generate_pir_template",
+        audit_input={
+            "project_id": project_id,
+            "closure_date": closure_date,
+        },
+    )
 
 
 async def _export_sro_dashboard_data(arguments: dict[str, Any]) -> list[TextContent]:

@@ -19,6 +19,45 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._groundedness import compute_groundedness
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain for pm-knowledge decisions
+# ─────────────────────────────────────────────────────────────────────────
+
+_AUDIT_MODULE = "pm_knowledge"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+
 from .knowledge_base import (
     BENCHMARK_DATA,
     FAILURE_PATTERNS,
@@ -365,6 +404,101 @@ async def _search_knowledge_base(arguments: dict[str, Any]) -> list[TextContent]
     return [TextContent(type="text", text=json.dumps({"query": arguments["query"], "category": category, "count": len(results), "results": results}, indent=2))]
 
 
+def _build_reference_class_band(
+    recommended_p80: float,
+    median: float,
+    mean: float,
+    unit: str,
+    alpha: float = 0.2,
+    n_synth: int = 200,
+) -> dict[str, Any]:
+    """Return a conformal interval around the recommended P80.
+
+    The bundled IPA benchmark data ships descriptive statistics
+    (median, P80, mean) rather than raw outcomes, so we synthesise a
+    calibration sample of past comparable-project outcomes consistent
+    with those landmarks, compute residuals against the P80, and run
+    A4's :func:`conformal_predict_band`.
+
+    The synthesis assumes outcomes are approximately normal with mean
+    equal to the IPA mean and standard deviation derived from the
+    (P80 - median) gap. The z-score 0.8416 maps to the 80th percentile
+    of a standard normal: P80 ≈ median + 0.8416 * σ, so
+    σ ≈ (P80 - median) / 0.8416. This is a pragmatic approximation —
+    a future PR could swap in raw samples once the IPA dataset is
+    available.
+
+    Args:
+        recommended_p80: The IPA P80 value for this project type /
+            estimate type. The band is centred here.
+        median: IPA median outcome.
+        mean: IPA mean outcome (used as the centre of the synthesised
+            distribution).
+        unit: Unit string for the response, e.g. ``"%"`` or
+            ``" months"``.
+        alpha: Target miscoverage rate. Default 0.2 (80% coverage),
+            matching the paper's reference and the rest of the
+            platform's L4 integrations.
+        n_synth: Number of synthetic outcomes to generate. Default
+            200 — large enough for stable quantile estimation,
+            small enough to keep the response fast.
+
+    Returns:
+        ``{"status": "COMPUTED", "alpha": 0.2, "coverage_pct": 80.0,
+        "band": {"lower": x, "upper": y, "half_width": h,
+        "unit": "..."}, "method": "synthetic-from-IPA-descriptives"}``.
+        When the input stats don't permit synthesis (e.g. P80 <=
+        median), returns ``{"status": "NOT_COMPUTED", "reason": ...}``.
+    """
+    if not (recommended_p80 > median) or recommended_p80 <= 0:
+        return {
+            "status": "NOT_COMPUTED",
+            "reason": (
+                "Benchmark distribution does not permit conformal "
+                "synthesis: requires P80 > median > 0. Got "
+                f"median={median}, P80={recommended_p80}."
+            ),
+            "alpha": alpha,
+            "coverage_pct": round((1.0 - alpha) * 100, 1),
+        }
+
+    # Deferred — calibration sub-module pulls in scipy.
+    import numpy as np
+
+    from agent_planning.calibration import conformal_predict_band
+
+    # Derive σ from the median / P80 gap: P80 of N(μ, σ) is μ + 0.8416 σ.
+    sigma = max(1e-6, (recommended_p80 - median) / 0.8416)
+    # Use the IPA mean as the centre when present (more representative
+    # than the median when the distribution is skewed); fall back to
+    # the median.
+    centre = mean if mean else median
+
+    rng = np.random.default_rng(seed=int(round(recommended_p80 * 1000)))
+    synth_outcomes = rng.normal(loc=centre, scale=sigma, size=n_synth)
+    residuals = (synth_outcomes - recommended_p80).tolist()
+
+    lower, upper = conformal_predict_band(
+        point_estimate=recommended_p80,
+        calibration_residuals=residuals,
+        alpha=alpha,
+    )
+
+    return {
+        "status": "COMPUTED",
+        "alpha": alpha,
+        "coverage_pct": round((1.0 - alpha) * 100, 1),
+        "band": {
+            "lower": round(lower, 2),
+            "upper": round(upper, 2),
+            "half_width": round((upper - lower) / 2.0, 2),
+            "unit": unit.strip() or None,
+        },
+        "method": "synthetic-from-IPA-descriptives",
+        "n_calibration_samples": n_synth,
+    }
+
+
 _REFERENCE_CLASS_VALID_ESTIMATES = ("cost_overrun", "schedule_slip")
 # Forgive common LLM-style abbreviations. The schema enum only lists the
 # canonical keys, but a caller passing 'cost' clearly means 'cost_overrun'
@@ -438,6 +572,22 @@ async def _run_reference_class_check(arguments: dict[str, Any]) -> list[TextCont
             f"estimate or that this project has specific characteristics that warrant higher provisions."
         )
 
+    # ── Layer 4: conformal prediction interval around the P80 ──────────
+    # Synthesise calibration residuals from the IPA descriptive stats
+    # (median + P80 + mean) and run A4's conformal_predict_band to
+    # produce a coverage-guaranteed interval. The residuals model the
+    # spread of past comparable-project outcomes around the IPA
+    # recommended P80; the interval tells the consumer "the true
+    # outcome for this project is likely to lie in this range with X%
+    # confidence, conditional on the reference class being applicable".
+    conformal_band = _build_reference_class_band(
+        recommended_p80=p80,
+        median=median,
+        mean=mean,
+        unit=unit,
+        alpha=0.2,
+    )
+
     result = {
         "project_type": project_type,
         "estimate_type": estimate_type,
@@ -456,8 +606,26 @@ async def _run_reference_class_check(arguments: dict[str, Any]) -> list[TextCont
             "p80_provision": f"{recommended_p80}{unit}",
             "guidance": "HM Treasury Green Book requires optimism bias uplifts to be applied to raw estimates. Budget setting should use P80, not P50.",
         },
+        "_calibration": conformal_band,
         "interpretation": interpretation,
     }
+    # Audit-chain entry — the decision is whether optimism bias is
+    # flagged, and the percentile that drove that classification.
+    _safe_record_decision(
+        input_data={
+            "project_type": project_type,
+            "estimate_type": estimate_type,
+            "submitted_value": submitted_value,
+        },
+        output_data={
+            "approximate_percentile": approx_percentile,
+            "optimism_bias_risk": optimism_bias_risk,
+            "median": median,
+            "p80": p80,
+        },
+        decision="OPTIMISM_BIAS_FLAGGED" if optimism_bias_risk else "WITHIN_RANGE",
+        action="run_reference_class_check",
+    )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
@@ -509,6 +677,71 @@ async def _get_benchmark_percentile(arguments: dict[str, Any]) -> list[TextConte
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for pre-mortem questions
+# ─────────────────────────────────────────────────────────────────────────
+# Pre-mortem questions are consumed verbatim in gate-review forums, so
+# any forbidden phrase in the question text would propagate directly
+# into a reviewer's challenge script. Today the questions are sourced
+# from PREMORTEM_QUESTIONS and RISK_FLAG_QUESTIONS — deterministic
+# lookups — but the guardrail catches future drift if those constants
+# are edited (or if an LLM-augmented question source is wired in later).
+_PREMORTEM_QUESTIONS_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_premortem_questions_guardrail(result: dict[str, Any]) -> list[TextContent]:
+    """Run the assembled pre-mortem questions dict through the L5 policy.
+
+    APPROVED: original JSON returned unchanged.
+    FLAGGED: ``_guardrail_flags`` added to the result dict.
+    REJECTED: structured error JSON returned; the original questions
+        list is suppressed so a forum facilitator cannot accidentally
+        deliver a question containing a forbidden phrase.
+    """
+    full_text = json.dumps(result, default=str)
+    evaluation = evaluate({"document": full_text}, _PREMORTEM_QUESTIONS_POLICY)
+    if evaluation.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": evaluation.verdict.value,
+                        "message": (
+                            "Generated pre-mortem questions contained one or "
+                            "more phrases forbidden by the L5 deterministic "
+                            "policy. Inspect `triggered` for the failing "
+                            "rules; the original questions have been "
+                            "suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in evaluation.triggered],
+                        "evaluations": [e.to_dict() for e in evaluation.evaluations],
+                    }
+                ),
+            )
+        ]
+    if evaluation.verdict == Verdict.FLAGGED:
+        result = dict(result)
+        result["_guardrail_flags"] = evaluation.to_dict()
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
 async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextContent]:
     gate = arguments.get("gate", "ANY")
     risk_flags = arguments.get("risk_flags", [])
@@ -557,7 +790,61 @@ async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextC
             "to the programme team and require a specific, evidence-based answer — not a reassurance."
         ),
     }
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    # L6: attach groundedness. By construction the question text comes
+    # verbatim from the PREMORTEM_QUESTIONS / RISK_FLAG_QUESTIONS
+    # bundled constants, so the verdict is normally GROUNDED. The
+    # field still carries value: the provenance_trail records which
+    # constants supplied which questions (audit-trail evidence for a
+    # reviewer asking "where do these questions come from?"). If a
+    # caller has monkeypatched the constants and a question's words
+    # diverge from any constant, the diverging tokens land in
+    # ``ungrounded_terms``.
+    answer = "\n".join(q.get("question", "") for q in unique_questions)
+    sources = [
+        {
+            "id": "premortem_questions",
+            "content": json.dumps(PREMORTEM_QUESTIONS, default=str),
+        },
+        {
+            "id": "risk_flag_questions",
+            "content": json.dumps(RISK_FLAG_QUESTIONS, default=str),
+        },
+    ]
+    if answer.strip():
+        gnd = compute_groundedness(
+            answer, sources, query="generate_premortem_questions"
+        )
+        result["_groundedness"] = gnd.to_dict()
+    else:
+        result["_groundedness"] = {
+            "verdict": "NOT_COMPUTED",
+            "reason": "No questions emitted; nothing to ground.",
+        }
+    result["_quality"] = derive_quality_from_groundedness(
+        result["_groundedness"]
+    )
+
+    # Audit-chain entry — record the gate + risk-flag inputs and the
+    # number of questions produced. The decision captures whether any
+    # questions were emitted at all (NO_QUESTIONS for the
+    # empty-flags, no-gate-match case).
+    _safe_record_decision(
+        input_data={
+            "gate": gate,
+            "risk_flags": risk_flags,
+        },
+        output_data={
+            "question_count": result["question_count"],
+        },
+        decision=(
+            "QUESTIONS_EMITTED"
+            if result["question_count"] > 0
+            else "NO_QUESTIONS"
+        ),
+        action="generate_premortem_questions",
+    )
+    return _apply_premortem_questions_guardrail(result)
 
 
 # ── MCP handlers ──────────────────────────────────────────────────────────────

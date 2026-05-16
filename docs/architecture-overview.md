@@ -4,6 +4,8 @@
 
 The PDA Platform provides a modular, interoperable infrastructure for AI-enabled project delivery. Built as a response to the PDA Task Force White Paper on AI implementation barriers, the platform consists of three independently deployable packages that work together to enable AI systems to understand, validate, and analyze project management data.
 
+The platform exposes **126 MCP tools across 18 modules** and implements the nine-layer **Verified Autonomy** framework (Newman et al., May 2026, DOI [10.5281/zenodo.19096229](https://doi.org/10.5281/zenodo.19096229)) end-to-end — deterministic guardrails, groundedness checking, tamper-evident audit chains, conformal prediction intervals, four-tier escalation routing, and formally-verified RAG monotonicity. See [`verified-autonomy-overview.md`](verified-autonomy-overview.md) for the consumer-facing summary.
+
 ## System Architecture
 
 ```
@@ -193,8 +195,8 @@ openai         # Optional: GPT integration
 
 #### Unified Server
 
-The **`pda-platform-server`** is a single MCP endpoint that aggregates all 58 tools
-from 6 modules. Each module exports a `registry.py` with its tool definitions and a
+The **`pda-platform-server`** is a single MCP endpoint that aggregates all 126 tools
+from 18 modules. Each module exports a `registry.py` with its tool definitions and a
 `dispatch()` function. The unified server imports and combines them at startup.
 
 For remote access (e.g., from Claude.ai), **`pda-platform-remote`** wraps the unified

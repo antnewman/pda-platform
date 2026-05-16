@@ -496,6 +496,28 @@ class AssuranceStore:
                     parameters_json      TEXT
                 );
 
+                -- Conformal-prediction calibration history for the Monte
+                -- Carlo simulator. One row per (project, simulation_type)
+                -- pairs a past forecast point estimate with the actual
+                -- outcome observed. `conformal_predict_band` consumes the
+                -- residuals (actual - predicted) and returns a calibrated
+                -- coverage interval. Verified Autonomy §7.3.
+                CREATE TABLE IF NOT EXISTS simulation_residuals (
+                    id                  TEXT PRIMARY KEY,
+                    project_id          TEXT NOT NULL,
+                    simulation_type     TEXT NOT NULL,
+                    simulation_run_id   TEXT,
+                    predicted_value     REAL NOT NULL,
+                    actual_value        REAL NOT NULL,
+                    residual            REAL NOT NULL,
+                    quantile_label      TEXT,     -- e.g. 'P50', 'P80'
+                    notes               TEXT,
+                    recorded_at         TEXT DEFAULT (datetime('now'))
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_simulation_residuals_project
+                    ON simulation_residuals (project_id, simulation_type);
+
                 CREATE TABLE IF NOT EXISTS lessons (
                     id              TEXT PRIMARY KEY,
                     project_id      TEXT NOT NULL,
@@ -2672,6 +2694,87 @@ class AssuranceStore:
             )
             row = cursor.fetchone()
         return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # Simulation residuals (conformal calibration history)
+    # ------------------------------------------------------------------
+
+    def upsert_simulation_residual(self, residual: dict) -> None:
+        """Insert or replace a (forecast, actual) calibration pair.
+
+        Args:
+            residual: Dict with required keys ``id``, ``project_id``,
+                ``simulation_type``, ``predicted_value``, ``actual_value``.
+                The ``residual`` (``actual_value - predicted_value``) is
+                computed if absent. Optional: ``simulation_run_id``,
+                ``quantile_label``, ``notes``, ``recorded_at``.
+        """
+        predicted = float(residual["predicted_value"])
+        actual = float(residual["actual_value"])
+        delta = float(residual.get("residual", actual - predicted))
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO simulation_residuals
+                    (id, project_id, simulation_type, simulation_run_id,
+                     predicted_value, actual_value, residual,
+                     quantile_label, notes, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    residual["id"],
+                    residual["project_id"],
+                    residual["simulation_type"],
+                    residual.get("simulation_run_id"),
+                    predicted,
+                    actual,
+                    delta,
+                    residual.get("quantile_label"),
+                    residual.get("notes"),
+                    residual.get("recorded_at"),
+                ),
+            )
+        logger.debug(
+            "simulation_residual_upserted",
+            id=residual["id"],
+            project_id=residual["project_id"],
+            simulation_type=residual["simulation_type"],
+            residual=delta,
+        )
+
+    def get_simulation_residuals(
+        self,
+        project_id: str,
+        simulation_type: str,
+        quantile_label: str | None = None,
+    ) -> list[dict]:
+        """Return the calibration history for a (project, sim_type) pair.
+
+        Args:
+            project_id: Project identifier.
+            simulation_type: ``"schedule"`` or ``"cost"``.
+            quantile_label: When supplied, restrict to residuals of a
+                given quantile (e.g. ``"P50"`` or ``"P80"``). When
+                ``None``, return all residuals.
+
+        Returns:
+            List of residual dicts ordered by ``recorded_at`` ascending.
+            Empty list when no calibration history exists.
+        """
+        conditions = ["project_id = ?", "simulation_type = ?"]
+        params: list = [project_id, simulation_type]
+        if quantile_label is not None:
+            conditions.append("quantile_label = ?")
+            params.append(quantile_label)
+        where = " AND ".join(conditions)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"SELECT * FROM simulation_residuals WHERE {where} "
+                "ORDER BY recorded_at ASC",
+                params,
+            )
+            rows = cursor.fetchall()
+        return [dict(row) for row in rows]
 
     # ------------------------------------------------------------------
     # Lessons (pm-lessons module)

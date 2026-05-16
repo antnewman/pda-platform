@@ -29,6 +29,201 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
+from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._groundedness import compute_groundedness
+from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain
+# ─────────────────────────────────────────────────────────────────────────
+# pm-assumptions decisions (confidence scoring, drift detection,
+# executive report assembly) are chained for tamper-evidence. Same
+# pattern as pm-assure: best-effort recording via _safe_record_decision
+# so a disk/permissions failure never breaks tool output.
+
+_AUDIT_MODULE = "pm_assumptions"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness checking for the assumption report
+# ─────────────────────────────────────────────────────────────────────────
+# The assumption report is the JSON-shaped executive-facing artefact
+# for pm-assumptions. After assembly, the narratives inside are
+# checked for groundedness against the same underlying data
+# (assumption rows + external signals) that the report claims to
+# summarise. The result is attached as a top-level ``_groundedness``
+# field. L6 is informational — it does NOT gate the response (L5
+# already does that).
+
+
+def _attach_groundedness_to_assumption_report(
+    report: dict,
+    assumptions: list[dict],
+    signals: list[dict],
+) -> dict:
+    """Run the report narratives through the groundedness checker and
+    add a ``_groundedness`` field to the report dict.
+
+    The "answer" is the concatenation of every narrative-bearing field
+    in the assembled report. The "sources" are the raw assumption
+    rows and external signals from the store — exactly the material
+    the report claims to summarise.
+
+    Returns a NEW dict (does not mutate ``report``) so the caller
+    keeps a clean copy for retry.
+    """
+    summary = report.get("executive_summary") or {}
+    cascade = report.get("cascade_risk") or {}
+    answer_parts: list[str] = [
+        str(summary.get("narrative", "")),
+        str(summary.get("signals_narrative", "")),
+        str(cascade.get("cascade_narrative", "")),
+    ]
+    for action in report.get("top_at_risk_assumptions", []) or []:
+        answer_parts.append(str(action.get("action", "")))
+        answer_parts.append(str(action.get("text", "")))
+    for governance_action in report.get("governance_actions", []) or []:
+        answer_parts.append(str(governance_action))
+    answer = "\n".join(p for p in answer_parts if p)
+
+    sources: list[dict] = []
+    if assumptions:
+        sources.append(
+            {
+                "id": "assumptions",
+                "content": json.dumps(assumptions, default=str),
+            }
+        )
+    if signals:
+        sources.append(
+            {
+                "id": "external_signals",
+                "content": json.dumps(signals, default=str),
+            }
+        )
+
+    new_report = dict(report)
+    if not answer.strip() or not sources:
+        new_report["_groundedness"] = {
+            "verdict": "NOT_COMPUTED",
+            "reason": (
+                "No narrative content or no source data — grounding "
+                "could not be computed."
+            ),
+        }
+        return new_report
+
+    result = compute_groundedness(
+        answer, sources, query="generate_assumption_report"
+    )
+    new_report["_groundedness"] = result.to_dict()
+    new_report["_quality"] = derive_quality_from_groundedness(
+        new_report["_groundedness"]
+    )
+    return new_report
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for assumption-report generation
+# ─────────────────────────────────────────────────────────────────────────
+# The assumption report is the executive-facing artefact for the
+# pm-assumptions module. It is referenced in board papers and external
+# signal dashboards, so the same overclaim and template-leak protections
+# we apply to the board exception report apply here.
+#
+# Today the report's narratives are deterministic (composed from
+# templates in code). The guardrail is still useful as a regression
+# guard against future drift where someone might wire an LLM into the
+# narrative path or accept user-supplied prose.
+_ASSUMPTION_REPORT_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_assumption_report_guardrail(report: dict) -> list[TextContent]:
+    """Run the assembled assumption-report dict through the L5 policy.
+
+    The check is applied to the full report serialised as a single
+    string, so a forbidden phrase appearing in any field — top-level
+    narrative, nested executive-summary text, per-assumption action,
+    cascade narrative, governance action — fires regardless of where
+    it appears. This avoids brittle per-field rule lists.
+
+    APPROVED: original JSON returned unchanged.
+    FLAGGED: ``_guardrail_flags`` added to the report dict, original
+        fields preserved.
+    REJECTED: structured error JSON returned; the original report is
+        suppressed so a consumer cannot accidentally render it.
+    """
+    full_text = json.dumps(report, default=str)
+    result = evaluate({"document": full_text}, _ASSUMPTION_REPORT_POLICY)
+
+    if result.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": result.verdict.value,
+                        "message": (
+                            "Generated assumption report contained one or more "
+                            "phrases forbidden by the L5 deterministic policy. "
+                            "Inspect `triggered` for the failing rules; the "
+                            "original report has been suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in result.triggered],
+                        "evaluations": [e.to_dict() for e in result.evaluations],
+                    }
+                ),
+            )
+        ]
+    if result.verdict == Verdict.FLAGGED:
+        report = dict(report)
+        report["_guardrail_flags"] = result.to_dict()
+    return [TextContent(type="text", text=json.dumps(report, indent=2, default=str))]
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -834,6 +1029,26 @@ async def _score_assumption_confidence(arguments: dict) -> list[TextContent]:
         # Sort: lowest confidence first
         scored.sort(key=lambda x: x["score"])
 
+        # Audit-chain entry — record the verdict shape (RAG counts and
+        # total) without storing every per-assumption score in the
+        # chain. The decision string is the highest-severity RAG band
+        # present, so the chain answers "what was the worst-case
+        # assumption-confidence outcome for this project?" cleanly.
+        if rag_counts["RED"] > 0:
+            verdict = "ASSUMPTIONS_RED"
+        elif rag_counts["AMBER"] > 0:
+            verdict = "ASSUMPTIONS_AMBER"
+        else:
+            verdict = "ASSUMPTIONS_GREEN"
+        _safe_record_decision(
+            input_data={"project_id": project_id},
+            output_data={
+                "total_assumptions": len(scored),
+                "rag_summary": rag_counts,
+            },
+            decision=verdict,
+            action="score_assumption_confidence",
+        )
         return [TextContent(type="text", text=json.dumps({
             "project_id": project_id,
             "total_assumptions": len(scored),
@@ -996,6 +1211,23 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
         if cascade:
             summary += f" Linked items at risk: {', '.join(cascade)}."
 
+        _safe_record_decision(
+            input_data={
+                "project_id": project_id,
+                "assumption_id": assumption_id,
+                "indicator": indicator,
+                "source": source,
+            },
+            output_data={
+                "severity": severity,
+                "drift_direction": drift_direction,
+                "drift_pct": round(drift_pct, 1) if drift_pct is not None else None,
+                "cascade_count": len(cascade),
+            },
+            decision=f"DRIFT_{severity}",
+            action="detect_external_drift",
+            metadata={"is_boolean": is_boolean},
+        )
         return [TextContent(type="text", text=json.dumps({
             "project_id": project_id,
             "assumption_id": assumption_id,
@@ -1632,7 +1864,37 @@ async def _generate_assumption_report(arguments: dict) -> list[TextContent]:
             ),
         }
 
-        return [TextContent(type="text", text=json.dumps(report, indent=2, default=str))]
+        # L6 then L5 — annotate first, then gate. The guardrail
+        # evaluates the annotated report; if it rejects, the
+        # _groundedness annotation is suppressed alongside the prose
+        # (rejection JSON is returned instead).
+        report = _attach_groundedness_to_assumption_report(
+            report, assumptions, signals
+        )
+
+        # L8 audit-chain entry — record the executive verdict (RAG
+        # summary counts + cascade-risk verdict) without storing the
+        # full prose body. Recorded BEFORE the L5 guardrail so the
+        # entry exists even if L5 rejects (auditors then see both
+        # "we generated a report" and "L5 blocked it" downstream).
+        summary = report.get("executive_summary") or {}
+        cascade = report.get("cascade_risk") or {}
+        rag_summary = report.get("rag_summary") or {}
+        _safe_record_decision(
+            input_data={"project_id": project_id},
+            output_data={
+                "rag_summary": rag_summary,
+                "cascade_verdict": cascade.get("verdict"),
+                "executive_score": summary.get("overall_score"),
+            },
+            decision=summary.get("overall_rag") or "UNKNOWN",
+            action="generate_assumption_report",
+            metadata={
+                "assumption_count": len(assumptions),
+                "signal_count": len(signals),
+            },
+        )
+        return _apply_assumption_report_guardrail(report)
 
     except Exception as exc:
         import traceback
@@ -1919,7 +2181,7 @@ async def _export_assumption_html_dashboard(arguments: dict) -> list[TextContent
       <span><strong>Project:</strong> {esc(project_id)}</span>
       <span><strong>Report date:</strong> {report_date}</span>
       {f'<span><strong>Gate context:</strong> {esc(gate_label)}</span>' if gate_label else ''}
-      <span><strong>Platform tools:</strong> 124 (18 modules)</span>
+      <span><strong>Platform tools:</strong> 126 (18 modules)</span>
     </div>
   </header>
 

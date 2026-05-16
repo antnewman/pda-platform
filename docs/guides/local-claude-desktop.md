@@ -75,7 +75,7 @@ In a new Claude Desktop conversation, type:
 
 > "What PDA tools do you have available?"
 
-Claude should respond with a summary of the 58 tools across the six modules (pm-data, pm-analyse, pm-validate, pm-nista, pm-assure, pm-brm). If you see no tools or an error, check that `pda-platform-server` is on your system PATH by running `pda-platform-server --help` in a terminal.
+Claude should respond with a summary of the 126 tools across the 18 modules. If you see no tools or an error, check that `pda-platform-server` is on your system PATH by running `pda-platform-server --help` in a terminal.
 
 ---
 

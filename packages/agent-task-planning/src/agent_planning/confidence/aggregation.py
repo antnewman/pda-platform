@@ -210,6 +210,51 @@ def compute_overall_confidence(field_confidences: dict[str, float]) -> float:
     return weighted_sum / weight_sum if weight_sum > 0 else 0.0
 
 
+def compute_overall_confidence_with_gap(
+    field_confidences: dict[str, float],
+) -> dict[str, float]:
+    """Compute weighted and plain-arithmetic confidence, surfacing the gap.
+
+    Verified Autonomy Layer 1 (Inverse Confidence Weighting) — exposes
+    the difference between the conservative inverse-weighted average
+    and the naive arithmetic mean so a consumer can see how much
+    aggregation choice is influencing the headline number.
+
+    The inverse-weighting formula (``weight = 2.0 - conf``) drags the
+    weighted average towards the lowest field confidences, so
+    ``weighted <= plain_mean`` for any non-empty mix of confidences;
+    ``gap = plain_mean - weighted`` is therefore non-negative. A
+    large gap means the conservative weighting is materially below
+    the naive average — i.e. there are low-confidence fields the
+    naive mean is hiding.
+
+    Args:
+        field_confidences: ``{field_name: confidence}`` mapping with
+            values in ``[0, 1]``.
+
+    Returns:
+        ``{"weighted": w, "plain_mean": p, "gap": p - w,
+        "field_count": n}``. All-zero when the input is empty.
+    """
+    if not field_confidences:
+        return {
+            "weighted": 0.0,
+            "plain_mean": 0.0,
+            "gap": 0.0,
+            "field_count": 0,
+        }
+
+    confidences = list(field_confidences.values())
+    plain_mean = sum(confidences) / len(confidences)
+    weighted = compute_overall_confidence(field_confidences)
+    return {
+        "weighted": weighted,
+        "plain_mean": plain_mean,
+        "gap": plain_mean - weighted,
+        "field_count": len(confidences),
+    }
+
+
 def check_early_stop(
     extractions: list[dict[str, Any]],
     threshold: float,
