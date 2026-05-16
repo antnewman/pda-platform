@@ -19,6 +19,13 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+
 from .knowledge_base import (
     BENCHMARK_DATA,
     FAILURE_PATTERNS,
@@ -509,6 +516,71 @@ async def _get_benchmark_percentile(arguments: dict[str, Any]) -> list[TextConte
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for pre-mortem questions
+# ─────────────────────────────────────────────────────────────────────────
+# Pre-mortem questions are consumed verbatim in gate-review forums, so
+# any forbidden phrase in the question text would propagate directly
+# into a reviewer's challenge script. Today the questions are sourced
+# from PREMORTEM_QUESTIONS and RISK_FLAG_QUESTIONS — deterministic
+# lookups — but the guardrail catches future drift if those constants
+# are edited (or if an LLM-augmented question source is wired in later).
+_PREMORTEM_QUESTIONS_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_premortem_questions_guardrail(result: dict[str, Any]) -> list[TextContent]:
+    """Run the assembled pre-mortem questions dict through the L5 policy.
+
+    APPROVED: original JSON returned unchanged.
+    FLAGGED: ``_guardrail_flags`` added to the result dict.
+    REJECTED: structured error JSON returned; the original questions
+        list is suppressed so a forum facilitator cannot accidentally
+        deliver a question containing a forbidden phrase.
+    """
+    full_text = json.dumps(result, default=str)
+    evaluation = evaluate({"document": full_text}, _PREMORTEM_QUESTIONS_POLICY)
+    if evaluation.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": evaluation.verdict.value,
+                        "message": (
+                            "Generated pre-mortem questions contained one or "
+                            "more phrases forbidden by the L5 deterministic "
+                            "policy. Inspect `triggered` for the failing "
+                            "rules; the original questions have been "
+                            "suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in evaluation.triggered],
+                        "evaluations": [e.to_dict() for e in evaluation.evaluations],
+                    }
+                ),
+            )
+        ]
+    if evaluation.verdict == Verdict.FLAGGED:
+        result = dict(result)
+        result["_guardrail_flags"] = evaluation.to_dict()
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
 async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextContent]:
     gate = arguments.get("gate", "ANY")
     risk_flags = arguments.get("risk_flags", [])
@@ -557,7 +629,7 @@ async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextC
             "to the programme team and require a specific, evidence-based answer — not a reassurance."
         ),
     }
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    return _apply_premortem_questions_guardrail(result)
 
 
 # ── MCP handlers ──────────────────────────────────────────────────────────────
