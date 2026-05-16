@@ -8,7 +8,7 @@
 [![PyPI - pm-data-tools](https://img.shields.io/pypi/v/pm-data-tools)](https://pypi.org/project/pm-data-tools/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18133574.svg)](https://doi.org/10.5281/zenodo.18133574)
 
-**124 tools · 18 modules · Production-deployed · Published on PyPI**
+**126 tools · 18 modules · Production-deployed · Published on PyPI**
 
 ---
 
