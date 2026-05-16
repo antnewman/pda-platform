@@ -31,6 +31,81 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for benefits narratives
+# ─────────────────────────────────────────────────────────────────────────
+# Benefits narratives are gate-review evidence — quoted in Treasury and
+# IPA submissions when the assurance reviewer asks "are the benefits
+# realistic?". Overclaim phrases in this output ("100% certain",
+# "absolutely guaranteed") are particularly damaging because the
+# narrative is the Green Book justification for continued investment.
+# Template leaks ("INSERT FIGURE HERE") would be embarrassing in a
+# minister-signed submission.
+_BENEFITS_NARRATIVE_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "INSERT BENEFIT HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_benefits_narrative_guardrail(output: dict[str, Any]) -> list[TextContent]:
+    """Run the assembled benefits-narrative output through the L5 policy.
+
+    APPROVED: returns the JSON output unchanged.
+    FLAGGED: adds ``_guardrail_flags`` to the output dict, preserves
+        every original field.
+    REJECTED: returns a structured error dict; the original
+        narrative_text (the Claude-authored prose) is suppressed so a
+        downstream Green Book consumer cannot render it.
+    """
+    full_text = json.dumps(output, default=str)
+    evaluation = evaluate({"document": full_text}, _BENEFITS_NARRATIVE_POLICY)
+    if evaluation.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": evaluation.verdict.value,
+                        "message": (
+                            "Generated benefits narrative contained one or "
+                            "more phrases forbidden by the L5 deterministic "
+                            "policy. Inspect `triggered` for the failing "
+                            "rules; the original narrative_text has been "
+                            "suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in evaluation.triggered],
+                        "evaluations": [e.to_dict() for e in evaluation.evaluations],
+                    }
+                ),
+            )
+        ]
+    if evaluation.verdict == Verdict.FLAGGED:
+        output = dict(output)
+        output["_guardrail_flags"] = evaluation.to_dict()
+    return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
@@ -1086,7 +1161,7 @@ async def _generate_benefits_narrative(
             ),
         }
 
-        return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
+        return _apply_benefits_narrative_guardrail(output)
 
     except Exception as exc:
         return [TextContent(type="text", text=f"Error: {exc}")]
