@@ -1,6 +1,6 @@
 # Connecting to PDA Platform
 
-This guide explains how to connect PDA Platform to Claude, ChatGPT, Gemini, or any MCP-compatible client. PDA Platform exposes 41 AI tools for project delivery — data loading, risk analysis, compliance validation, GMPP reporting, and a full assurance framework.
+This guide explains how to connect PDA Platform to Claude, ChatGPT, Gemini, or any MCP-compatible client. PDA Platform exposes 126 AI tools across 18 modules for project delivery — data loading, risk analysis, compliance validation, GMPP reporting, calibration evaluation, four-tier escalation routing, and a full assurance framework. Implements the nine-layer Verified Autonomy framework (see [`verified-autonomy-overview.md`](verified-autonomy-overview.md)).
 
 There are two connection methods:
 
@@ -50,7 +50,7 @@ Add the PDA Platform server:
 
 ### Step 3: Restart Claude Desktop
 
-Restart the application. You should see PDA Platform listed in the MCP tools panel with 58 tools available.
+Restart the application. You should see PDA Platform listed in the MCP tools panel with 126 tools available.
 
 ### Step 4: Test
 
@@ -74,7 +74,7 @@ Claude.ai supports remote MCP servers over SSE. You can connect to a hosted PDA 
 https://pda-platform-i33p.onrender.com/sse
 ```
 
-4. The 58 tools will appear in the conversation
+4. The 126 tools will appear in the conversation
 
 ### Hosting your own instance
 
@@ -130,7 +130,7 @@ In your project's `.claude/settings.json` or your global Claude Code config, add
 
 ### Step 3: Use
 
-The 58 tools are now available in your Claude Code session.
+The 126 tools are now available in your Claude Code session.
 
 ---
 
@@ -202,7 +202,7 @@ Connect your client to `http://localhost:8080/sse`.
 
 ## What you get
 
-Once connected, your AI assistant has access to 58 tools across six areas:
+Once connected, your AI assistant has access to 126 tools across 18 modules:
 
 | Area | Tools | What it does |
 |------|-------|-------------|

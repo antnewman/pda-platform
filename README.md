@@ -8,11 +8,13 @@
 [![PyPI - pm-data-tools](https://img.shields.io/pypi/v/pm-data-tools)](https://pypi.org/project/pm-data-tools/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18133574.svg)](https://doi.org/10.5281/zenodo.18133574)
 
-**124 tools · 18 modules · Production-deployed · Published on PyPI**
+**126 tools · 18 modules · Production-deployed · Published on PyPI**
+
+The platform implements the nine-layer **Verified Autonomy** framework (Newman et al., May 2026, DOI [10.5281/zenodo.19096229](https://doi.org/10.5281/zenodo.19096229)) end-to-end — deterministic guardrails, groundedness checking, tamper-evident audit chains, calibration with conformal prediction intervals, four-tier escalation routing, and formally-verified RAG monotonicity. See [`docs/verified-autonomy-overview.md`](docs/verified-autonomy-overview.md) for the consumer-facing summary.
 
 ---
 
-PDA Platform gives Claude and other MCP-compatible AI assistants **122 structured tools** to perform rigorous, evidence-based project delivery assurance aligned to IPA Gate Reviews (Gates 0–5), HM Treasury Green Book appraisal, and GMPP reporting standards. It is the only open-source MCP platform specifically designed for Senior Responsible Owners, Project Managers, Independent Assurance Reviewers, and Portfolio Managers working in UK government major project delivery.
+PDA Platform gives Claude and other MCP-compatible AI assistants **126 structured tools** to perform rigorous, evidence-based project delivery assurance aligned to IPA Gate Reviews (Gates 0–5), HM Treasury Green Book appraisal, and GMPP reporting standards. It is the only open-source MCP platform specifically designed for Senior Responsible Owners, Project Managers, Independent Assurance Reviewers, and Portfolio Managers working in UK government major project delivery.
 
 Think of it as a **semantic layer for project data**: it ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through a structured API that AI can reason about directly — without parsing raw XML or making things up.
 
@@ -79,7 +81,7 @@ This queries risk registers, benefits status, gate conditions, cost performance,
 
 ---
 
-## What Claude can do with 124 tools
+## What Claude can do with 126 tools
 
 Once connected, Claude can answer questions like:
 
@@ -120,15 +122,15 @@ Once connected, Claude can answer questions like:
 
 ---
 
-## 17 MCP Modules
+## 18 MCP Modules
 
 | Module | Tools | What it does |
 |--------|------:|-------------|
 | pm-data | 6 | Project loading, querying, format conversion across 8 PM data formats |
-| pm-analyse | 7 | AI risk analysis, schedule forecasting, health assessment, narrative divergence detection |
+| pm-analyse | 8 | AI risk analysis, schedule forecasting, health assessment, narrative divergence detection, calibration evaluation |
 | pm-validate | 4 | Structural, semantic, and NISTA compliance validation |
 | pm-nista | 5 | GMPP quarterly reporting, NISTA integration, longitudinal compliance |
-| pm-assure | 28 | Assurance lifecycle: artefact currency, gate readiness, ARMM, assumption drift, workflow engine, **cross-module red flag scanning** |
+| pm-assure | 29 | Assurance lifecycle: artefact currency, gate readiness, ARMM, assumption drift, workflow engine, **cross-module red flag scanning**, four-tier escalation routing |
 | pm-brm | 12 | Benefits Realisation Management: register, measurement, dependency network, drift, maturity, outturn forecasting, trajectory tracking |
 | pm-portfolio | 5 | Cross-project portfolio aggregation, health rollup, systemic risk detection |
 | pm-ev | 2 | Earned Value metrics (SPI/CPI/EAC/TCPI) and HTML S-curve dashboard |
@@ -137,12 +139,12 @@ Once connected, Claude can answer questions like:
 | pm-change | 5 | Change control log, impact analysis, change pressure analysis |
 | pm-resource | 5 | Resource loading, conflict detection, portfolio capacity planning |
 | pm-financial | 5 | Budget baseline, period actuals, EAC forecasting, spend profile |
-| pm-knowledge | 8 | IPA benchmarks, failure patterns, guidance references, reference class checks, pre-mortem questions |
-| pm-simulation | 2 | Monte Carlo schedule simulation with PERT distributions, P50/P80/P90 delivery dates |
+| pm-knowledge | 8 | IPA benchmarks, failure patterns, guidance references, reference class checks (with conformal bands), pre-mortem questions |
+| pm-simulation | 2 | Monte Carlo schedule simulation with PERT distributions, P50/P80/P90 delivery dates (with conformal bands when calibration history is available) |
 | pm-lessons | 5 | AI extraction of lessons from gate reviews/PIRs, cross-project keyword search, systemic pattern analysis |
 | pm-reporting | 6 | IPA-format gate review summaries, SRO dashboards, board exception reports, portfolio summaries, PIR templates, UDS export |
 | pm-assumptions | 8 | Assumption drift detection, confidence scoring, live external signal integration (ONS, World Bank), AI executive reports, cascade analysis, UDS dashboard |
-| **Total** | **122** | One unified endpoint · One connection |
+| **Total** | **126** | One unified endpoint · One connection |
 
 ---
 
@@ -163,7 +165,7 @@ PDA Platform
 ├── packages/
 │   ├── pm-data-tools/          Core library: parsers, validators, AssuranceStore (SQLite)
 │   ├── pda-platform/           Meta-package: pip install pda-platform installs everything
-│   ├── pm-mcp-servers/         18 MCP modules, 124 tools for AI integration
+│   ├── pm-mcp-servers/         18 MCP modules, 126 tools for AI integration
 │   └── agent-task-planning/    AI reliability: confidence extraction, outlier mining
 ├── docs/                       Practitioner guides, prompt library, technical references
 ├── specs/                      Canonical data model, benchmarks, synthetic data specs
@@ -210,7 +212,7 @@ PDA Platform
 | Document | Description |
 |----------|-------------|
 | [Architecture Overview](docs/architecture-overview.md) | System architecture and component interactions |
-| [MCP Tools Reference](docs/mcp-tools-reference.md) | Parameter-level reference for all 124 tools |
+| [MCP Tools Reference](docs/mcp-tools-reference.md) | Parameter-level reference for all 126 tools |
 | [Connection Guide](docs/connection-guide.md) | Connect Claude.ai, Claude Desktop, ChatGPT, Gemini |
 | [Getting Started](docs/getting-started.md) | Installation, configuration, and first steps |
 | [Data Model Reference](docs/data-model-reference.md) | Canonical data model and entity relationships |
@@ -242,7 +244,7 @@ pip install -e packages/pm-mcp-servers
 
 **Run tests:**
 ```bash
-cd packages/pm-mcp-servers && python -m pytest   # 76 tests, 124 tools
+cd packages/pm-mcp-servers && python -m pytest   # 205 tests, 126 tools
 cd packages/pm-data-tools && python -m pytest
 ```
 

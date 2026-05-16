@@ -1,8 +1,10 @@
 # PDA Platform — MCP Tools Reference
 
-**Version:** 2.3 | **Total tools:** 123 | **Modules:** 18
+**Version:** 2.4 | **Total tools:** 126 | **Modules:** 18
 
-This reference documents all 121 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
+This reference documents all 126 MCP tools available in the PDA Platform, covering parameter-level detail for each tool. The audience is developers and technical practitioners integrating with or extending the platform.
+
+The platform implements the nine-layer **Verified Autonomy** framework (Newman et al., May 2026, DOI [10.5281/zenodo.19096229](https://doi.org/10.5281/zenodo.19096229)) — see [`verified-autonomy-overview.md`](verified-autonomy-overview.md) for the consumer-facing summary and the "Response-level annotations from Verified Autonomy" subsection below for the new fields every AI-authored tool response now carries.
 
 ---
 
@@ -54,6 +56,22 @@ All pm-assure and pm-brm tools accept an optional `db_path` parameter pointing t
 
 Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) corresponding to the assurance framework module they implement. These codes appear in each tool's heading.
 
+### Response-level annotations from Verified Autonomy
+
+Every AI-authored tool response (nine tools across pm-reporting, pm-assumptions, pm-analyse, pm-knowledge, pm-brm, pm-lessons) now carries additional trust-signal fields produced by the platform's nine-layer Verified Autonomy implementation. These fields are additive — existing response shapes are unchanged. See [`verified-autonomy-overview.md`](verified-autonomy-overview.md) for the full explanation.
+
+- **`_groundedness`** (Layer 6) — token-overlap verdict measuring how well the AI's prose is supported by the source data that fed it. Fields: `verdict` (`GROUNDED` / `UNGROUNDED`), `overall_score` (0–1), `ungrounded_terms` (list of answer tokens that appear in no source — likely hallucinations), `per_source_citation_scores`, `provenance_trail` (human-readable audit string). Present on the nine AI-authored tools. Markdown-output tools (board reports, gate reviews, portfolio summaries, PIR templates, lessons sections) embed the JSON inside an HTML comment block at the bottom of the document; JSON-output tools attach it as a top-level field.
+
+- **`_quality`** (Layer 3) — quality score plus `potential_hallucinations` boolean derived from `_groundedness`. Fields: `verdict` (`COMPUTED` / `NOT_COMPUTED`), `overall_score`, `components` (coherence, relevance, completeness, semantic_entropy), `flagged_as_low_quality`, `potential_hallucinations`. The `potential_hallucinations` flag fires when (a) groundedness is `UNGROUNDED` OR (b) more than 30% of answer tokens are ungrounded — two independent triggers. Same nine tools.
+
+- **`_calibration`** (Layer 4) — conformal prediction interval. Present on `run_schedule_simulation` (P50 and P80 bands wrapped using stored residuals) and `run_reference_class_check` (band around IPA P80 synthesised from descriptors). Fields: `status` (`COMPUTED` / `NOT_COMPUTED`), `alpha`, `coverage_pct`, plus `p50_band` / `p80_band` / `band` when computed (each with `lower`, `upper`, `half_width`). `NOT_COMPUTED` carries a `reason` field explaining why (insufficient history, inconsistent distribution).
+
+- **`_guardrail_flags`** (Layer 5) — `FLAGGED`-but-not-rejected annotation. Present when a `WARN`-severity rule fires (current policies use `BLOCK` only; this field is reserved for future use).
+
+- **L5 structured rejection** — when a `BLOCK`-severity rule fires the response body is REPLACED with `{"error": "guardrail_rejected", "verdict": "REJECTED", "triggered": [...], "evaluations": [...]}` — the original prose is suppressed (hard fail-safe). Consumers should detect this shape and surface a clear retry/escalation path rather than rendering the payload as content.
+
+The platform's L8 audit chains record every decision-producing handler invocation to a per-module JSONL log under `$PDA_AUDIT_DIR` (defaults to `~/.pm_data_tools/audit/`). Operators can call `pm_mcp_servers._audit.verify_chain("<module>")` to confirm chain integrity. These entries are not surfaced in tool responses — they are operator-facing audit evidence.
+
 ---
 
 ## Module Summary
@@ -61,10 +79,10 @@ Tools in pm-assure and pm-brm are tagged with a capability code (e.g. P1, P13) c
 | Module | Tools | Purpose |
 |--------|-------|---------|
 | pm-data | 6 | Load project files, query tasks, dependencies, and critical path |
-| pm-analyse | 7 | AI-powered risk identification, forecasting, health assessment |
+| pm-analyse | 8 | AI-powered risk identification, forecasting, health assessment, narrative divergence, calibration evaluation |
 | pm-validate | 4 | Structural, semantic, NISTA, and custom validation |
 | pm-nista | 5 | GMPP quarterly reporting and NISTA API submission |
-| pm-assure | 28 | Full assurance lifecycle covering P1–P14 |
+| pm-assure | 29 | Full assurance lifecycle covering P1–P14, four-tier escalation routing |
 | pm-brm | 12 | Benefits Realisation Management aligned to IPA/Green Book (P13) |
 | pm-portfolio | 5 | Cross-project portfolio aggregation and health rollup |
 | pm-ev | 2 | Earned Value metrics (SPI/CPI/EAC/TCPI) and HTML dashboard |
@@ -319,6 +337,38 @@ Compare the current project state against a stored baseline to surface schedule,
 **Returns:** A variance report listing tasks with start, finish, and duration deviations, cost variance (if baseline cost data is present), severity classifications (minor / moderate / significant / critical), and aggregate project-level variance statistics.
 
 **Example prompt:** "Compare project PRJ-001 against its approved baseline and show me only variances greater than 5%."
+
+---
+
+### `evaluate_calibration`
+
+**Module:** pm-analyse
+**Verified Autonomy:** Layer 4 (§7.3)
+**Capability:** Compute Expected Calibration Error (ECE) and reliability-diagram bin data from a paired list of predicted probabilities and observed outcomes. A calibrated forecaster has confidence equal to accuracy on every subset of its predictions; this tool measures the empirical gap.
+
+Useful for: evaluating AI confidence scores against subsequent decisions, validating P50/P80 schedule forecasts against actual delivery, quantifying how well-calibrated RAG ratings are against true project outcomes.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| predictions | array of numbers in [0, 1] | Yes | — | Predicted probability or confidence per sample. For binary forecasts: probability of the positive class. For multi-class: the top-class probability. |
+| actuals | array of integers (0 or 1) | Yes | — | Observed outcomes per sample. Must be the same length as `predictions`. |
+| n_bins | integer | No | `15` | Number of equal-width bins on `[0, 1]` for the reliability diagram. |
+| project_id | string | No | — | Optional project identifier — included in the response for downstream audit traceability. |
+
+**Returns:** Dict with:
+
+- `ece` (float in `[0, 1]`) — scalar Expected Calibration Error. Lower is better.
+- `n_samples` (int) — count of paired (prediction, actual) entries.
+- `n_bins` (int) — echoed input.
+- `bins` (list of `n_bins` dicts) — per-bin reliability data: `lower`, `upper`, `count`, `mean_confidence`, `mean_accuracy`, `gap`. Empty bins (`count == 0`) carry `null` mean and gap fields so JSON consumers can render them as gaps in the diagram.
+- `interpretation` (string) — short human-readable summary (well-calibrated / acceptable / poorly calibrated) with a pointer to temperature scaling when ECE is high.
+- `project_id` (echoed when supplied).
+
+**Errors:** Length mismatch, out-of-range predictions / actuals, or invalid `n_bins` return `{"error": {"code": "INVALID_INPUT", ...}}` structured response.
+
+**Example prompt:** "Evaluate the calibration of our last quarter's RAG ratings against actual gate outcomes. Predictions were [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]; actuals were [1, 1, 0, 1, 0, 0, 0]."
 
 ---
 
@@ -1044,6 +1094,46 @@ Compare two gate readiness assessments to quantify improvement or regression —
 **Related tools:** Use `get_gate_readiness_history` to find assessment IDs.
 
 **Example prompt:** "Compare the Gate 2 readiness assessments from last month and this month for project PRJ-001 and show me what has improved."
+
+---
+
+### `route_outputs_to_review`
+
+**Module:** pm-assure
+**Verified Autonomy:** Layer 2 (§5.3)
+**Capability:** Apply the four-tier escalation router to a project's assumption-confidence outputs. Reads confidence scores from the assurance store, normalises them to `[0, 1]`, aggregates into an overall confidence, and returns one of `EXPERT_REQUIRED` / `DETAILED_REVIEW` / `SPOT_CHECK` / `NONE` based on the OR fail-safe (outliers OR low confidence each independently trigger escalation).
+
+Use this tool to decide where a project's outputs need human review before they reach a board or gate panel. The OR fail-safe is the point: a high overall confidence with a single statistical outlier still routes to `EXPERT_REQUIRED`.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| project_id | string | Yes | — | Project identifier — used to look up stored assumption-confidence scores. |
+| confidence_override | number in [0, 1] | No | (mean of stored scores) | Optional override for the overall confidence input. When omitted, the mean of stored scores (normalised to [0, 1]) is used. |
+| expert_threshold | number in [0, 1] | No | `0.4` | Confidence below this triggers `EXPERT_REQUIRED` on confidence alone. Paper §5.3 default. |
+| detailed_threshold | number in [0, 1] | No | `0.6` | Confidence below this (and at or above `expert_threshold`) triggers `DETAILED_REVIEW`. |
+| spot_threshold | number in [0, 1] | No | `0.8` | Confidence below this (and at or above `detailed_threshold`) triggers `SPOT_CHECK`. |
+| db_path | string | No | `~/.pm_data_tools/store.db` | Path to the SQLite assurance store. |
+
+**Returns:** A `RoutingDecision` dict with:
+
+- `level` — one of `EXPERT_REQUIRED`, `DETAILED_REVIEW`, `SPOT_CHECK`, `NONE`.
+- `reason` — plain-English explanation of why this level was selected.
+- `consensus` (float) — median of the input confidence scores; the "agreed reference point" the system thinks the answer is.
+- `confidence` (float) — the overall confidence used as input (either computed mean or override).
+- `outliers` (list) — per-sample outlier reports with label and reason strings.
+- `triggered_by_outliers` (bool) — whether outlier detection fired.
+- `triggered_by_confidence` (bool) — whether the low-confidence trigger fired. Both can be true simultaneously.
+- `thresholds_used` (tuple) — the threshold triple in effect.
+- `project_id` (echoed).
+- `sample_size` (int) — number of stored confidence scores aggregated.
+
+**Errors:** A project with no stored confidence scores returns `{"error": {"code": "NO_CONFIDENCE_HISTORY", "message": "..."}}` — the caller should run `score_assumption_confidence` first.
+
+**Related tools:** `score_assumption_confidence` (pm-assumptions) produces the inputs this tool consumes.
+
+**Example prompt:** "Route the outputs for project PRJ-001 to review. Use the OR fail-safe — if any single assumption is an outlier the whole project goes to expert review."
 
 ---
 
@@ -2419,4 +2509,4 @@ Export the assumption dependency graph for a project in multiple formats ready t
 
 ---
 
-*Reference updated: 15 April 2026 (v2.3 — 123 tools, 18 modules). For tool implementation details see the module source directories. For schema definitions see `docs/data-model-reference.md`.*
+*Reference updated: 16 May 2026 (v2.4 — 126 tools, 18 modules; added `evaluate_calibration` and `route_outputs_to_review`; added the "Response-level annotations from Verified Autonomy" subsection). For tool implementation details see the module source directories. For schema definitions see `docs/data-model-reference.md`.*

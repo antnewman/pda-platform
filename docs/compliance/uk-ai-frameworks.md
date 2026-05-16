@@ -18,7 +18,7 @@ PDA Platform addresses this through three mechanisms. First, the entire codebase
 
 ### Human Oversight
 
-The playbook states that humans must remain in control of consequential decisions. PDA Platform is designed exclusively as an advisory system. All 58 tools produce recommendations, assessments, or scored outputs — none of them trigger automated decisions or actions. The Gate Readiness Assessor (P14) synthesises P1–P13 signals into a composite score and a prioritised list of recommendations, but the gate decision itself remains with the human review panel. The Override Decision Logger (P6) records when governance decisions proceed against assurance advice, creating an auditable trail without preventing the override.
+The playbook states that humans must remain in control of consequential decisions. PDA Platform is designed exclusively as an advisory system. All 126 tools produce recommendations, assessments, or scored outputs — none of them trigger automated decisions or actions. The Gate Readiness Assessor (P14) synthesises P1–P13 signals into a composite score and a prioritised list of recommendations, but the gate decision itself remains with the human review panel. The Override Decision Logger (P6) records when governance decisions proceed against assurance advice, creating an auditable trail without preventing the override. The Verified Autonomy Layer 2 four-tier escalation router (`route_outputs_to_review`) makes this human-oversight requirement explicit at the output level: it tells the consumer whether each project's outputs need `EXPERT_REQUIRED`, `DETAILED_REVIEW`, `SPOT_CHECK`, or `NONE` based on the OR fail-safe of outliers OR low confidence.
 
 ### Security and Data Minimisation
 

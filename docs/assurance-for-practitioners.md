@@ -933,3 +933,100 @@ The fourteen features form a complete, layered assurance capability:
 | AI readiness | P12 | Is the project ready for AI-assisted delivery? |
 | Benefits tracking | P13 | Are expected benefits being realised? |
 | Gate readiness | P14 | Is the project ready for its next gateway? |
+
+## route_outputs_to_review — four-tier escalation
+
+`route_outputs_to_review` applies the **four-tier escalation router** from
+Verified Autonomy §5.3 to a project's stored assumption-confidence outputs.
+The router answers a specific governance question: **does this project's
+output need human review before it reaches a board or gate panel, and at
+what intensity?**
+
+The four tiers are:
+
+| Tier | Trigger | What happens |
+|------|---------|--------------|
+| `EXPERT_REQUIRED` | Any statistical outlier in the inputs **OR** overall confidence below 0.4 | Route to a domain expert. The output is not acted upon until reviewed. |
+| `DETAILED_REVIEW` | No outliers AND confidence in [0.4, 0.6) | A human reads every output in this tier before action. |
+| `SPOT_CHECK` | No outliers AND confidence in [0.6, 0.8) | Periodic sampling — a proportion are reviewed. |
+| `NONE` | No outliers AND confidence ≥ 0.8 | Auto-process without human review. |
+
+The crucial property is the **OR fail-safe**: outliers OR low confidence each
+**independently** trigger escalation.  A project with strong overall confidence
+but a single anomalous assumption still routes to expert review — because the
+anomaly is exactly the kind of thing optimism-bias screens are designed to
+catch.  Only the AND-clean path (no outliers, high confidence) gets to
+auto-process.
+
+### Worked example
+
+```
+route_outputs_to_review —
+  project_id: "PRJ-ALPHA"
+```
+
+The tool reads the project's stored confidence scores (one per assumption,
+populated by `score_assumption_confidence`), normalises them to `[0, 1]`,
+computes the overall confidence, and returns a `RoutingDecision`.  A typical
+response:
+
+```json
+{
+  "level": "EXPERT_REQUIRED",
+  "reason": "EXPERT_REQUIRED: 1 statistical outlier(s) detected. Confidence 0.82 alone would not have escalated, but the OR fail-safe routes any outlier to a domain expert.",
+  "consensus": 0.84,
+  "confidence": 0.82,
+  "outliers": [
+    {"field": "confidence", "consensus_value": 0.84, "outlier_value": 0.15,
+     "sample_index": 4, "divergence_score": 4.3,
+     "reason": "PRJ-ALPHA-A005: 4.3x IQR below the consensus of 0.84"}
+  ],
+  "triggered_by_outliers": true,
+  "triggered_by_confidence": false,
+  "thresholds_used": [0.4, 0.6, 0.8],
+  "sample_size": 7
+}
+```
+
+The reviewer reads this and goes straight to assumption `A005` — the one
+that fired the OR clause — rather than scanning the whole assumption
+register.
+
+### Override the overall confidence
+
+When you want to test the routing logic independently of the stored scores
+(for example, you've taken a board-level decision that the project's
+overall confidence is 0.95 regardless of the assumption-level scores):
+
+```
+route_outputs_to_review —
+  project_id: "PRJ-ALPHA"
+  confidence_override: 0.95
+```
+
+The OR fail-safe still fires on outliers, so if the assumption register has
+any single outlier the project still routes to `EXPERT_REQUIRED`.  This is
+deliberate — it's the kind of governance failure-mode the layer is designed
+to catch.
+
+### When to use
+
+- Before promoting a project's reports to a board pack: route first to
+  confirm whether expert review is required.
+- As part of the IPA Gate Review run-up: integrate into the assurance
+  workflow so the gate panel sees the routing decision alongside the
+  technical findings.
+- Periodically across the portfolio: identify which projects need the most
+  intensive review intensity this cycle.
+
+### Limitations
+
+- Requires `score_assumption_confidence` to have been run for the project.
+  Without stored confidence scores, the tool returns a structured
+  `NO_CONFIDENCE_HISTORY` error rather than attempting to route.
+- The thresholds (0.4 / 0.6 / 0.8) are paper §5.3 defaults; they can be
+  overridden per call but should be agreed at portfolio level rather than
+  tuned per-project to avoid gaming.
+- Outlier detection uses IQR (Tukey's fence at 1.5 × IQR by default).
+  Heavy-tailed confidence distributions may need a wider multiplier — pass
+  through configurable thresholds if needed.

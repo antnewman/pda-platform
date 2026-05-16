@@ -260,7 +260,7 @@ Give the connection a name, for example **PDA Platform**.
 
 **Step 3 — Save and test**
 
-Save the connection. Open a new conversation with this Custom GPT. Ask: "How many tools do you have access to from the PDA Platform?" A correctly connected instance will confirm access to 103 tools.
+Save the connection. Open a new conversation with this Custom GPT. Ask: "How many tools do you have access to from the PDA Platform?" A correctly connected instance will confirm access to 126 tools.
 
 **Step 4 — First use**
 
