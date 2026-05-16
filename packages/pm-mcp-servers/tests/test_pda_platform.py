@@ -2316,3 +2316,85 @@ class TestNarrativeDivergenceGuardrail:
         }
         result = _apply_narrative_divergence_guardrail(leaked)
         assert result["error"] == "guardrail_rejected"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_premortem_questions (issue #40 / B5)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPremortemQuestionsGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    generate_premortem_questions.
+
+    Pre-mortem questions are read verbatim into gate-review forums.
+    Today they come from deterministic constants in
+    pm_knowledge.knowledge_base; the guardrail is the regression
+    guard that catches drift if those constants are edited (or if
+    an LLM-augmented question source is wired in later).
+    """
+
+    async def test_default_questions_pass_through_clean(self):
+        """The bundled pre-mortem questions contain no forbidden
+        phrases, so the default call should return the original JSON
+        shape with no annotation and no error."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("generate_premortem_questions", {"gate": "ANY"})
+        payload = _json.loads(result[0].text)
+
+        # No rejection.
+        assert "error" not in payload or payload.get("error") != "guardrail_rejected"
+        # No FLAGGED annotation.
+        assert "_guardrail_flags" not in payload
+        # Standard shape preserved.
+        assert "questions" in payload
+        assert "gate" in payload
+        assert payload["question_count"] == len(payload["questions"])
+
+    async def test_forbidden_phrase_in_question_text_triggers_rejection(
+        self, monkeypatch
+    ):
+        """Monkeypatch a forbidden phrase into the question source and
+        confirm the guardrail rejects the response. The original
+        question text must NOT appear in the response — a facilitator
+        cannot accidentally deliver it from the wire."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_knowledge import server as knowledge_server
+
+        # Inject a question whose `question` text contains a forbidden
+        # phrase. The handler loads from PREMORTEM_QUESTIONS at call
+        # time, so monkeypatching the module-level constant takes
+        # effect for this test.
+        tainted_questions = {
+            "ANY": [
+                {
+                    "question": (
+                        "Are we 100% certain we can deliver in the planned "
+                        "timeframe under any plausible variant of the risks "
+                        "we have logged?"
+                    ),
+                    "targets": ["delivery_confidence"],
+                    "failure_mode": "Overconfidence",
+                }
+            ]
+        }
+        monkeypatch.setattr(
+            knowledge_server, "PREMORTEM_QUESTIONS", tainted_questions
+        )
+
+        result = await call_tool("generate_premortem_questions", {"gate": "ANY"})
+        text = result[0].text
+        # The original question prose is suppressed.
+        assert "deliver in the planned" not in text
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        # Message references the document kind.
+        assert "pre-mortem questions" in payload["message"]
+        triggered_names = [t["rule_name"] for t in payload["triggered"]]
+        assert any("forbidden_phrase" in name for name in triggered_names)
