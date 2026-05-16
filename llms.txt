@@ -4,7 +4,7 @@
 
 ## What it is
 
-PDA Platform (Project Data Analytics) is a semantic layer for project delivery data. It ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through 122 structured MCP tools that AI can reason about directly.
+PDA Platform (Project Data Analytics) is a semantic layer for project delivery data. It ingests schedules from Primavera, MSP, Jira, and 5 other formats; normalises them into a consistent delivery model; pre-loads IPA benchmark statistics from five years of Annual Reports; and exposes everything through 124 structured MCP tools that AI can reason about directly.
 
 The platform is aligned to UK government delivery standards: IPA Gate Reviews (Gates 0-5), HM Treasury Green Book, GMPP reporting, and Cabinet Office project controls.
 
