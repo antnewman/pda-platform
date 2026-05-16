@@ -29,12 +29,89 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
+from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
     build_forbidden_phrase_rule,
     evaluate,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness checking for the assumption report
+# ─────────────────────────────────────────────────────────────────────────
+# The assumption report is the JSON-shaped executive-facing artefact
+# for pm-assumptions. After assembly, the narratives inside are
+# checked for groundedness against the same underlying data
+# (assumption rows + external signals) that the report claims to
+# summarise. The result is attached as a top-level ``_groundedness``
+# field. L6 is informational — it does NOT gate the response (L5
+# already does that).
+
+
+def _attach_groundedness_to_assumption_report(
+    report: dict,
+    assumptions: list[dict],
+    signals: list[dict],
+) -> dict:
+    """Run the report narratives through the groundedness checker and
+    add a ``_groundedness`` field to the report dict.
+
+    The "answer" is the concatenation of every narrative-bearing field
+    in the assembled report. The "sources" are the raw assumption
+    rows and external signals from the store — exactly the material
+    the report claims to summarise.
+
+    Returns a NEW dict (does not mutate ``report``) so the caller
+    keeps a clean copy for retry.
+    """
+    summary = report.get("executive_summary") or {}
+    cascade = report.get("cascade_risk") or {}
+    answer_parts: list[str] = [
+        str(summary.get("narrative", "")),
+        str(summary.get("signals_narrative", "")),
+        str(cascade.get("cascade_narrative", "")),
+    ]
+    for action in report.get("top_at_risk_assumptions", []) or []:
+        answer_parts.append(str(action.get("action", "")))
+        answer_parts.append(str(action.get("text", "")))
+    for governance_action in report.get("governance_actions", []) or []:
+        answer_parts.append(str(governance_action))
+    answer = "\n".join(p for p in answer_parts if p)
+
+    sources: list[dict] = []
+    if assumptions:
+        sources.append(
+            {
+                "id": "assumptions",
+                "content": json.dumps(assumptions, default=str),
+            }
+        )
+    if signals:
+        sources.append(
+            {
+                "id": "external_signals",
+                "content": json.dumps(signals, default=str),
+            }
+        )
+
+    new_report = dict(report)
+    if not answer.strip() or not sources:
+        new_report["_groundedness"] = {
+            "verdict": "NOT_COMPUTED",
+            "reason": (
+                "No narrative content or no source data — grounding "
+                "could not be computed."
+            ),
+        }
+        return new_report
+
+    result = compute_groundedness(
+        answer, sources, query="generate_assumption_report"
+    )
+    new_report["_groundedness"] = result.to_dict()
+    return new_report
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1712,6 +1789,13 @@ async def _generate_assumption_report(arguments: dict) -> list[TextContent]:
             ),
         }
 
+        # L6 then L5 — annotate first, then gate. The guardrail
+        # evaluates the annotated report; if it rejects, the
+        # _groundedness annotation is suppressed alongside the prose
+        # (rejection JSON is returned instead).
+        report = _attach_groundedness_to_assumption_report(
+            report, assumptions, signals
+        )
         return _apply_assumption_report_guardrail(report)
 
     except Exception as exc:

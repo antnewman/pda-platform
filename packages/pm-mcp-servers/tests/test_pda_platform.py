@@ -2968,3 +2968,97 @@ class TestBoardExceptionReportGroundedness:
         # L6 is informational; the response is still the markdown
         # report, not a guardrail rejection.
         assert "guardrail_rejected" not in text
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_assumption_report (issue #46 / B11)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestAssumptionReportGroundedness:
+    """L6 attaches a ``_groundedness`` field to the JSON assumption
+    report after L5 has approved it. The field carries the verdict,
+    score, ungrounded terms, and provenance trail — all derived from
+    comparing the assembled narrative text against the raw assumption
+    rows and external signals."""
+
+    def _seed_assumptions(self, project_id: str = "ASSUMP-L6-TEST"):
+        from datetime import date
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        today = str(date.today())
+        for i in range(3):
+            store.upsert_assumption(
+                {
+                    "id": f"{project_id}-A{i:03d}",
+                    "project_id": project_id,
+                    "text": f"Schedule milestone {i} relies on supplier delivery",
+                    "category": "DELIVERY",
+                    "baseline_value": 1.0,
+                    "current_value": None,
+                    "unit": "boolean",
+                    "tolerance_pct": 0.0,
+                    "source": "Internal estimate",
+                    "external_ref": None,
+                    "dependencies": "",
+                    "owner": "Test Owner",
+                    "last_validated": None,
+                    "created_date": today,
+                    "notes": (
+                        "Impact if false: Schedule slippage. | "
+                        "Likelihood: MEDIUM | "
+                        "Validation plan: Quarterly review | "
+                        "Status: Open | "
+                        f"Review date: {today}"
+                    ),
+                }
+            )
+        return project_id
+
+    async def test_clean_report_carries_groundedness_field(self):
+        """The assumption report's deterministic narratives are
+        assembled from the underlying assumption rows, so the
+        groundedness score should be high (the narrative cites the
+        same words the source data uses). The field structure must
+        carry verdict + overall_score + ungrounded_terms +
+        provenance_trail for downstream consumers."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        project_id = self._seed_assumptions("ASSUMP-L6-CLEAN")
+        result = await call_tool(
+            "generate_assumption_report", {"project_id": project_id}
+        )
+        payload = _json.loads(result[0].text)
+        # Original report shape preserved.
+        assert "executive_summary" in payload
+        # L6 field present and well-formed.
+        assert "_groundedness" in payload
+        gnd = payload["_groundedness"]
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED", "NOT_COMPUTED")
+        if gnd["verdict"] != "NOT_COMPUTED":
+            assert "overall_score" in gnd
+            assert "ungrounded_terms" in gnd
+            assert "provenance_trail" in gnd
+
+    async def test_groundedness_is_not_computed_when_no_signals(self):
+        """Even without external signals stored, the report still
+        produces a meaningful groundedness check because the
+        assumption rows themselves are valid sources. So the verdict
+        is GROUNDED or UNGROUNDED, never NOT_COMPUTED, when there is
+        at least one assumption."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        project_id = self._seed_assumptions("ASSUMP-L6-NOSIGS")
+        result = await call_tool(
+            "generate_assumption_report", {"project_id": project_id}
+        )
+        payload = _json.loads(result[0].text)
+        gnd = payload["_groundedness"]
+        # NOT NOT_COMPUTED — assumptions provide sources.
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
