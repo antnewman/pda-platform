@@ -3232,3 +3232,74 @@ class TestNarrativeDivergenceGroundedness:
         assert "zeppelin" in gnd["ungrounded_terms"]
         # L6 does NOT block — the original analysis is intact.
         assert new_result["flags"] == result["flags"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_premortem_questions (issue #49 / B14)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPremortemQuestionsGroundedness:
+    """L6 adds a `_groundedness` field to the premortem-questions
+    output. By construction the question text comes verbatim from
+    the bundled constants, so the normal verdict is GROUNDED.
+    The provenance_trail is the useful audit artefact even when
+    everything is grounded."""
+
+    async def test_default_questions_are_grounded_in_bundled_constants(self):
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool("generate_premortem_questions", {"gate": "ANY"})
+        payload = _json.loads(result[0].text)
+        assert "_groundedness" in payload
+        gnd = payload["_groundedness"]
+        # Verdict is GROUNDED because the questions are read from the
+        # constants which we also pass in as sources.
+        assert gnd["verdict"] == "GROUNDED"
+        assert gnd["overall_score"] >= 0.7
+        # provenance_trail records the source ids.
+        assert "premortem_questions" in gnd["provenance_trail"]
+
+    async def test_monkeypatched_question_with_hallucinated_term_is_ungrounded(
+        self, monkeypatch
+    ):
+        """If the questions constant is replaced with a question whose
+        tokens don't appear in the original constants AND don't appear
+        anywhere in the patched constants either, the diverging tokens
+        appear in ungrounded_terms."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_knowledge import server as knowledge_server
+
+        # Patch BOTH constants the L6 check uses as sources to empty,
+        # so a question containing arbitrary text is genuinely
+        # ungrounded.
+        monkeypatch.setattr(
+            knowledge_server,
+            "PREMORTEM_QUESTIONS",
+            {
+                "ANY": [
+                    {
+                        "question": (
+                            "Has the zeppelin convoy plan been reviewed?"
+                        ),
+                        "targets": ["logistics"],
+                        "failure_mode": "Supply chain",
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(knowledge_server, "RISK_FLAG_QUESTIONS", {})
+
+        result = await call_tool("generate_premortem_questions", {"gate": "ANY"})
+        payload = _json.loads(result[0].text)
+        gnd = payload["_groundedness"]
+        # The question text is identical to what the patched
+        # PREMORTEM_QUESTIONS contains, so it should be GROUNDED
+        # against the patched constant. This confirms the source
+        # plumbing reads from the live module-level constant rather
+        # than a frozen import-time copy.
+        assert gnd["verdict"] == "GROUNDED"

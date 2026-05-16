@@ -19,6 +19,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
@@ -629,6 +630,38 @@ async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextC
             "to the programme team and require a specific, evidence-based answer — not a reassurance."
         ),
     }
+
+    # L6: attach groundedness. By construction the question text comes
+    # verbatim from the PREMORTEM_QUESTIONS / RISK_FLAG_QUESTIONS
+    # bundled constants, so the verdict is normally GROUNDED. The
+    # field still carries value: the provenance_trail records which
+    # constants supplied which questions (audit-trail evidence for a
+    # reviewer asking "where do these questions come from?"). If a
+    # caller has monkeypatched the constants and a question's words
+    # diverge from any constant, the diverging tokens land in
+    # ``ungrounded_terms``.
+    answer = "\n".join(q.get("question", "") for q in unique_questions)
+    sources = [
+        {
+            "id": "premortem_questions",
+            "content": json.dumps(PREMORTEM_QUESTIONS, default=str),
+        },
+        {
+            "id": "risk_flag_questions",
+            "content": json.dumps(RISK_FLAG_QUESTIONS, default=str),
+        },
+    ]
+    if answer.strip():
+        gnd = compute_groundedness(
+            answer, sources, query="generate_premortem_questions"
+        )
+        result["_groundedness"] = gnd.to_dict()
+    else:
+        result["_groundedness"] = {
+            "verdict": "NOT_COMPUTED",
+            "reason": "No questions emitted; nothing to ground.",
+        }
+
     return _apply_premortem_questions_guardrail(result)
 
 
