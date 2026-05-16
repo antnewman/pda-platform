@@ -18,12 +18,107 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
     build_forbidden_phrase_rule,
     evaluate,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness checking for AI-authored documents
+# ─────────────────────────────────────────────────────────────────────────
+# After an AI-authored document is generated, run it through the
+# token-overlap groundedness checker and attach the result to the
+# response. For markdown documents this is appended as a visible
+# footer so the consumer (and any reviewer) sees the groundedness
+# verdict alongside the prose. For JSON documents the result is added
+# as a ``_groundedness`` field.
+#
+# The check is purely informational — it does NOT gate the response.
+# That is the L5 layer's job. L6 surfaces a trust signal: the consumer
+# can see how well the AI's prose is supported by the underlying data.
+
+
+def _build_groundedness_sources(
+    project_data: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Turn the project_data dict from ``_gather_project_data`` into a
+    list of source documents for :func:`compute_groundedness`.
+
+    Each top-level key becomes one source with that key as ``id`` and
+    the JSON-serialised value as ``content``. Sources with empty or
+    error-string values are skipped — they would contribute zero
+    coverage.
+    """
+    sources: list[dict[str, Any]] = []
+    if not project_data:
+        return sources
+    for key, value in project_data.items():
+        if not value:
+            continue
+        if isinstance(value, str) and value.startswith("[unavailable:"):
+            continue
+        sources.append(
+            {
+                "id": str(key),
+                "content": json.dumps(value, default=str),
+            }
+        )
+    return sources
+
+
+def _format_groundedness_footer(result_dict: dict[str, Any]) -> str:
+    """Build the visible markdown footer carrying the groundedness verdict.
+
+    Designed to be machine-readable (the dict is JSON-embedded in an
+    HTML comment) and human-readable (the score + verdict + top
+    ungrounded terms are shown as italic text). The HTML-comment block
+    is what an Evidence Engine / UDS consumer parses for the
+    structured fields; the italic line is what a board reviewer sees.
+    """
+    score = result_dict.get("overall_score", 0.0)
+    verdict = result_dict.get("verdict", "UNGROUNDED")
+    terms = result_dict.get("ungrounded_terms", []) or []
+    terms_preview = ", ".join(terms[:8])
+    if len(terms) > 8:
+        terms_preview += f", … (+{len(terms) - 8} more)"
+    if not terms_preview:
+        terms_preview = "(none)"
+    human_line = (
+        f"*Groundedness: {score:.2f} ({verdict}). "
+        f"Ungrounded terms: {terms_preview}*"
+    )
+    machine_block = (
+        "<!-- _groundedness: "
+        + json.dumps(result_dict, default=str)
+        + " -->"
+    )
+    return f"\n\n---\n{human_line}\n\n{machine_block}\n"
+
+
+def _attach_groundedness_to_markdown(
+    document: str,
+    sources: list[dict[str, Any]],
+    query: str | None = None,
+) -> str:
+    """Append a groundedness footer to a markdown document.
+
+    Returns the document with the footer appended. If ``sources`` is
+    empty, falls back to a footer that records ``UNGROUNDED — no
+    source data`` rather than skipping the annotation entirely (so
+    the absence of grounding is visible rather than implicit).
+    """
+    if not sources:
+        return (
+            document
+            + "\n\n---\n*Groundedness: not computed — no source data "
+            "available from the store at generation time.*\n"
+        )
+    result = compute_groundedness(document, sources, query=query)
+    return document + _format_groundedness_footer(result.to_dict())
 
 server = Server("pm-reporting")
 
@@ -833,10 +928,17 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
     # below). Same graceful-fallback pattern as pm_assumptions/_fetch_ons
     # uses for failed external API calls: same output shape, clearly-
     # labelled fallback, includes the reason.
+    sources = _build_groundedness_sources(project_data)
+
     client = _get_anthropic_client()
     if client is None:
         document = _compose_evidence_only_board_report(
             project_id, reporting_period, project_data
+        )
+        # L6 first (annotate), then L5 (gate). If L5 rejects, the
+        # annotated document is suppressed in favour of the error JSON.
+        document = _attach_groundedness_to_markdown(
+            document, sources, query="evidence-only board exception report"
         )
         return _apply_board_report_guardrail(document)
 
@@ -889,6 +991,7 @@ Rules:
             project_id, reporting_period, project_data
         )
 
+    document = _attach_groundedness_to_markdown(document, sources, query=prompt)
     return _apply_board_report_guardrail(document)
 
 
