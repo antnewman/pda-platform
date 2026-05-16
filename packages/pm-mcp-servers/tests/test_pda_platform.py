@@ -3062,3 +3062,77 @@ class TestAssumptionReportGroundedness:
         gnd = payload["_groundedness"]
         # NOT NOT_COMPUTED — assumptions provide sources.
         assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_gate_review_summary (issue #47 / B12)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestGateReviewSummaryGroundedness:
+    """L6 attaches a groundedness footer to the IPA-format gate review
+    summary markdown. Reuses the shared
+    `_attach_groundedness_to_markdown` helper from B10 so the
+    footer shape is identical across pm-reporting tools."""
+
+    def _seed(self, project_id: str = "GATE-L6-TEST"):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Supplier capacity constraint",
+                "description": "Single-supplier risk identified.",
+                "category": "COMMERCIAL",
+                "likelihood": 3,
+                "impact": 4,
+                "risk_score": 12,
+                "status": "OPEN",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_gate_review_summary_carries_groundedness_footer(
+        self, monkeypatch
+    ):
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=3000: (
+                "# Gate 3 Review Summary — GATE-L6-CLEAN\n\n"
+                "**Delivery Confidence Assessment:** AMBER\n\n"
+                "## Executive Summary\n"
+                "Supplier capacity constraint identified at Gate 3."
+            ),
+        )
+
+        project_id = self._seed("GATE-L6-CLEAN")
+        result = await call_tool(
+            "generate_gate_review_summary",
+            {"project_id": project_id, "gate_number": 3},
+        )
+        text = result[0].text
+        assert "Groundedness:" in text
+        # HTML comment block is present.
+        assert "<!-- _groundedness:" in text
+        # Parse it and validate the structure.
+        start = text.index("<!-- _groundedness:") + len("<!-- _groundedness:")
+        end = text.index("-->", start)
+        gnd = _json.loads(text[start:end].strip())
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
