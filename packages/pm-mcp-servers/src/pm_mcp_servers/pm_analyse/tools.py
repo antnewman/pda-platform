@@ -13,6 +13,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
 from pm_mcp_servers.shared import project_store
 
 from .analyzers import BaselineComparator, HealthAnalyzer, OutlierDetector
@@ -21,6 +27,73 @@ from .models import AnalysisDepth, AnalysisMetadata, ForecastMethod
 from .risk_engine import RiskEngine
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for narrative-divergence analysis
+# ─────────────────────────────────────────────────────────────────────────
+# `detect_narrative_divergence` is the AI-authored analyst in pm-analyse:
+# Claude classifies factual claims as SUPPORTED, CONTRADICTED, or
+# UNVERIFIABLE and writes explanations. The Evidence Engine consumes
+# this output downstream, so a phrase like "100% certain" or a template
+# leak ("INSERT NARRATIVE HERE") in the explanations would propagate
+# unchecked into board-facing surfaces.
+#
+# The check evaluates the full result dict serialised as JSON — a
+# forbidden phrase in any flags[].explanation, supported_claims[].text,
+# etc. fires regardless of where it appears.
+_NARRATIVE_DIVERGENCE_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_narrative_divergence_guardrail(result: dict[str, Any]) -> dict[str, Any]:
+    """Run the assembled narrative-divergence result through L5 policy.
+
+    APPROVED: return ``result`` unchanged.
+    FLAGGED: add ``_guardrail_flags`` to ``result``, original fields
+        preserved.
+    REJECTED: replace with structured error JSON; the original analysis
+        (including Claude-authored explanations) is suppressed.
+
+    Uses a full-result-as-string check so a forbidden phrase anywhere
+    in the structured output fires, without per-field rules.
+    """
+    import json as _json
+
+    text = _json.dumps(result, default=str)
+    evaluation = evaluate({"document": text}, _NARRATIVE_DIVERGENCE_POLICY)
+
+    if evaluation.verdict == Verdict.REJECTED:
+        return {
+            "error": "guardrail_rejected",
+            "verdict": evaluation.verdict.value,
+            "message": (
+                "Generated narrative-divergence analysis contained one or "
+                "more phrases forbidden by the L5 deterministic policy. "
+                "Inspect `triggered` for the failing rules; the original "
+                "analysis has been suppressed."
+            ),
+            "triggered": [e.to_dict() for e in evaluation.triggered],
+            "evaluations": [e.to_dict() for e in evaluation.evaluations],
+        }
+    if evaluation.verdict == Verdict.FLAGGED:
+        result = dict(result)
+        result["_guardrail_flags"] = evaluation.to_dict()
+    return result
 
 
 # ============================================================================
@@ -1108,7 +1181,7 @@ Only output the JSON. Do not add any commentary before or after."""
     else:
         overall_assessment = "MINOR_DIVERGENCE"
 
-    return {
+    return _apply_narrative_divergence_guardrail({
         "project_id": project_id,
         "overall_assessment": overall_assessment,
         "divergence_score": round(divergence_score, 3),
@@ -1119,7 +1192,7 @@ Only output the JSON. Do not add any commentary before or after."""
         "unverifiable_claims": unverifiable_claims,
         "data_used": data_used,
         "data_gaps": data_gaps,
-    }
+    })
 
 # ============================================================================
 # Tool 7: Detect Narrative Divergence
