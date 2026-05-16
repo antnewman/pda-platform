@@ -3136,3 +3136,99 @@ class TestGateReviewSummaryGroundedness:
         end = text.index("-->", start)
         gnd = _json.loads(text[start:end].strip())
         assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: detect_narrative_divergence (issue #48 / B13)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestNarrativeDivergenceGroundedness:
+    """L6 adds a top-level `_groundedness` field to the JSON output of
+    detect_narrative_divergence — measuring how well the Claude-
+    authored claims and evidence strings are grounded in the project
+    data that fed the analysis."""
+
+    def test_clean_result_carries_groundedness_field(self):
+        from pm_mcp_servers.pm_analyse.tools import (
+            _attach_groundedness_to_divergence_result,
+        )
+
+        result = {
+            "project_id": "DIV-L6-CLEAN",
+            "overall_assessment": "ALIGNED",
+            "divergence_score": 0.0,
+            "claims_assessed": 2,
+            "contradictions": 0,
+            "flags": [],
+            "supported_claims": [
+                {
+                    "claim": "Schedule risk is being actively managed",
+                    "evidence": "Latest gate AMBER with mitigation plan",
+                }
+            ],
+            "unverifiable_claims": [],
+            "data_used": ["risks", "gate_readiness"],
+            "data_gaps": [],
+        }
+        data_summary = {
+            "risks": {"open": 1, "top_risks": [{"title": "Schedule risk"}]},
+            "gate_readiness": {"readiness": "AMBER"},
+        }
+        new_result = _attach_groundedness_to_divergence_result(
+            result, data_summary
+        )
+        assert "_groundedness" in new_result
+        gnd = new_result["_groundedness"]
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+        assert "overall_score" in gnd
+        assert "provenance_trail" in gnd
+
+    def test_no_sources_produces_not_computed_verdict(self):
+        from pm_mcp_servers.pm_analyse.tools import (
+            _attach_groundedness_to_divergence_result,
+        )
+
+        result = {
+            "project_id": "DIV-L6-NOSRC",
+            "overall_assessment": "DIVERGENT",
+            "flags": [{"claim": "Test", "evidence": "Test"}],
+            "supported_claims": [],
+            "unverifiable_claims": [],
+        }
+        new_result = _attach_groundedness_to_divergence_result(result, {})
+        assert new_result["_groundedness"]["verdict"] == "NOT_COMPUTED"
+
+    def test_hallucinated_term_appears_in_ungrounded_terms(self):
+        from pm_mcp_servers.pm_analyse.tools import (
+            _attach_groundedness_to_divergence_result,
+        )
+
+        result = {
+            "project_id": "DIV-L6-HAL",
+            "overall_assessment": "DIVERGENT",
+            "divergence_score": 0.6,
+            "claims_assessed": 1,
+            "contradictions": 1,
+            "flags": [
+                {
+                    "claim": "Programme requires zeppelin reinforcement",
+                    "evidence": "Zeppelin convoy unavailable",
+                }
+            ],
+            "supported_claims": [],
+            "unverifiable_claims": [],
+            "data_used": ["risks"],
+            "data_gaps": [],
+        }
+        data_summary = {
+            "risks": {"open": 2, "top_risks": [{"title": "Schedule risk"}]},
+        }
+        new_result = _attach_groundedness_to_divergence_result(
+            result, data_summary
+        )
+        gnd = new_result["_groundedness"]
+        # The hallucinated term should appear as ungrounded.
+        assert "zeppelin" in gnd["ungrounded_terms"]
+        # L6 does NOT block — the original analysis is intact.
+        assert new_result["flags"] == result["flags"]
