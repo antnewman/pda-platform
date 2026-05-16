@@ -3530,3 +3530,78 @@ class TestLessonsSectionGroundedness:
         text = result[0].text
         # Special "not computed" message appears.
         assert "Groundedness: not computed" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_pir_template (issue #53 / B18)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPirTemplateGroundedness:
+    """L6 attaches a groundedness footer to the PIR template markdown.
+    Sources are the project_data dict (risks, gate readiness,
+    benefits, financials, change requests) — the same material the
+    PIR pre-populates from. Completes the L6 cluster: all nine AI-
+    authored tools now surface a groundedness verdict."""
+
+    def _seed(self, project_id: str = "PIR-L6-TEST"):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Procurement single-supplier risk",
+                "description": "Concentration risk on key supplier identified at Gate 3.",
+                "category": "COMMERCIAL",
+                "likelihood": 3,
+                "impact": 4,
+                "risk_score": 12,
+                "status": "CLOSED",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_pir_template_carries_groundedness_footer(self, monkeypatch):
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=4000: (
+                "# Post-Implementation Review — PIR-L6-CLEAN\n\n"
+                "**Closure Date:** 2026-05-01  **Prepared by:** [PLACEHOLDER]\n\n"
+                "## 3. Risks That Materialised\n"
+                "Procurement single-supplier risk closed with mitigation."
+            ),
+        )
+
+        project_id = self._seed("PIR-L6-CLEAN")
+        result = await call_tool(
+            "generate_pir_template", {"project_id": project_id}
+        )
+        text = result[0].text
+        # Markdown shape preserved; PIR's [PLACEHOLDER] markers
+        # untouched (L5 already validated this in B9).
+        assert text.startswith("#")
+        assert "[PLACEHOLDER]" in text
+        # L6 footer present.
+        assert "Groundedness:" in text
+        assert "<!-- _groundedness:" in text
+        start = text.index("<!-- _groundedness:") + len("<!-- _groundedness:")
+        end = text.index("-->", start)
+        gnd = _json.loads(text[start:end].strip())
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
