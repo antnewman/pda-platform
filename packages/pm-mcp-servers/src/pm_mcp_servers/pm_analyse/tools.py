@@ -1650,3 +1650,145 @@ Only output the JSON. Do not add any commentary before or after."""
         "data_used": data_used,
         "data_gaps": data_gaps,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Tool: evaluate_calibration (Verified Autonomy Layer 4 / §7.3)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def evaluate_calibration(params: dict[str, Any]) -> dict[str, Any]:
+    """Compute Expected Calibration Error and reliability-diagram data.
+
+    Implements the §7.3 calibration-measurement primitive from
+    *Verified Autonomy*. Pure compute path — delegates to A4's
+    :func:`agent_planning.calibration.compute_ece` and shapes the
+    result for MCP consumption.
+
+    Returns a structured dict:
+
+    * ``ece`` — scalar ECE in ``[0, 1]``. Lower is better.
+    * ``n_samples`` — count of paired (prediction, actual) entries.
+    * ``bins`` — list of ``n_bins`` dicts with ``lower``, ``upper``,
+      ``count``, ``mean_confidence``, ``mean_accuracy``, ``gap``.
+      Empty bins surface as ``count == 0`` with NaN-valued means;
+      the JSON serialiser emits ``null`` for these so the consumer
+      can render them as gaps in the reliability diagram.
+    * ``interpretation`` — short human-readable summary of what the
+      ECE means (excellent / acceptable / poor) plus pointer to
+      temperature scaling for correction.
+    * ``project_id`` — echoed input when supplied.
+
+    Validation surfaces a structured error response for empty input,
+    length mismatch, or out-of-range predictions / actuals — matching
+    the pattern used by the other pm-analyse tools.
+    """
+    import math
+
+    predictions = params.get("predictions")
+    actuals = params.get("actuals")
+    n_bins = int(params.get("n_bins", 15))
+    project_id = params.get("project_id")
+
+    if not predictions or not actuals:
+        return {
+            "error": {
+                "code": "MISSING_PARAMETER",
+                "message": "Both `predictions` and `actuals` are required and must be non-empty.",
+                "suggestion": (
+                    "Provide a paired list of predicted probabilities in [0, 1] "
+                    "and observed outcomes encoded as 0/1."
+                ),
+            }
+        }
+    if len(predictions) != len(actuals):
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": (
+                    f"predictions ({len(predictions)}) and actuals ({len(actuals)}) "
+                    "must be the same length."
+                ),
+            }
+        }
+    if n_bins < 1:
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": f"n_bins must be >= 1; got {n_bins}.",
+            }
+        }
+    try:
+        predictions = [float(p) for p in predictions]
+        actuals = [int(a) for a in actuals]
+    except (TypeError, ValueError) as exc:
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": f"Failed to coerce predictions/actuals: {exc}",
+            }
+        }
+    if any(not 0.0 <= p <= 1.0 for p in predictions):
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": "All predictions must be in [0, 1].",
+            }
+        }
+    if any(a not in (0, 1) for a in actuals):
+        return {
+            "error": {
+                "code": "INVALID_INPUT",
+                "message": "All actuals must be 0 or 1.",
+            }
+        }
+
+    from agent_planning.calibration import compute_ece
+
+    result = compute_ece(actuals, predictions, n_bins=n_bins)
+
+    def _scrub_nan(value: float) -> float | None:
+        return None if math.isnan(value) else value
+
+    bins = [
+        {
+            "lower": b.lower,
+            "upper": b.upper,
+            "count": b.count,
+            "mean_confidence": _scrub_nan(b.mean_confidence),
+            "mean_accuracy": _scrub_nan(b.mean_accuracy),
+            "gap": _scrub_nan(b.gap),
+        }
+        for b in result.bins
+    ]
+
+    if result.ece < 0.05:
+        interpretation = (
+            f"ECE = {result.ece:.4f} — well-calibrated. Confidence "
+            "tracks accuracy closely; no recalibration required."
+        )
+    elif result.ece < 0.15:
+        interpretation = (
+            f"ECE = {result.ece:.4f} — acceptable but not excellent. "
+            "Some over- or under-confidence across bins; consider "
+            "temperature scaling on a held-out validation set."
+        )
+    else:
+        interpretation = (
+            f"ECE = {result.ece:.4f} — poorly calibrated. Predicted "
+            "confidence drifts materially from observed accuracy. "
+            "Apply temperature scaling (Verified Autonomy §7.3) "
+            "before relying on these probabilities for downstream "
+            "routing or budget decisions."
+        )
+
+    output: dict[str, Any] = {
+        "ece": result.ece,
+        "n_samples": result.n_samples,
+        "n_bins": n_bins,
+        "bins": bins,
+        "interpretation": interpretation,
+    }
+    if project_id is not None:
+        output["project_id"] = project_id
+    return output
