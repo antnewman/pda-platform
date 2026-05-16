@@ -3376,3 +3376,78 @@ class TestBenefitsNarrativeGroundedness:
         }
         new_output = _attach_groundedness_to_benefits_output(output, {})
         assert new_output["_groundedness"]["verdict"] == "NOT_COMPUTED"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_portfolio_summary (issue #51 / B16)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPortfolioSummaryGroundedness:
+    """L6 attaches a groundedness footer to the portfolio summary
+    markdown. Sources span every project's data plus the per-project
+    scorecard — one source per project so per-source citation scores
+    identify which project supports which narrative fragment."""
+
+    def _seed_two_projects(self):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        pids = ["PORT-L6-001", "PORT-L6-002"]
+        for pid in pids:
+            store.upsert_risk(
+                {
+                    "id": f"{pid}-R001",
+                    "project_id": pid,
+                    "title": "Supplier capacity constraint",
+                    "description": "Single-supplier risk.",
+                    "category": "COMMERCIAL",
+                    "likelihood": 3,
+                    "impact": 3,
+                    "risk_score": 9,
+                    "status": "OPEN",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        return pids
+
+    async def test_portfolio_summary_carries_groundedness_footer(
+        self, monkeypatch
+    ):
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=2000: (
+                "# Portfolio Summary — Test\n\n"
+                "Two projects in scope. Single-supplier risk identified "
+                "in both projects."
+            ),
+        )
+        pids = self._seed_two_projects()
+        result = await call_tool(
+            "generate_portfolio_summary",
+            {"project_ids": pids, "portfolio_name": "Test"},
+        )
+        text = result[0].text
+        assert "Groundedness:" in text
+        assert "<!-- _groundedness:" in text
+        start = text.index("<!-- _groundedness:") + len("<!-- _groundedness:")
+        end = text.index("-->", start)
+        gnd = _json.loads(text[start:end].strip())
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+        # Per-source citation scores — one entry per project.
+        per_source = gnd["per_source_citation_scores"]
+        assert any(k.startswith("project_PORT-L6-") for k in per_source.keys())
