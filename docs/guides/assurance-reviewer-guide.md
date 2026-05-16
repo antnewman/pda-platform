@@ -33,6 +33,22 @@ This combination — assurance reviewer system prompt plus the gate readiness re
 
 ---
 
+## Reading Verified Autonomy response annotations
+
+The platform now annotates every AI-authored output with machine-checked trust signals. For an assurance reviewer these are not commentary — they are direct evidence you can cite in your written findings.
+
+**`_groundedness` and `ungrounded_terms`** — When you run `detect_narrative_divergence` or any of the AI-authored synthesis tools, the response carries a `_groundedness` field with an `ungrounded_terms` list. These are tokens that appear in the prose but have no source in the underlying project data — they are the most likely places an AI has fabricated a claim rather than synthesised one. **Treat the ungrounded-terms list as the focus of your written challenge.** "Your narrative claims the integration workstream is *accelerated* but the data shows it is eight weeks behind baseline; the platform's groundedness check flags this term as unsupported. Please explain the basis for this characterisation" is a finding the programme team has to address on the record.
+
+**`_calibration.band` on reference-class checks** — `run_reference_class_check` now returns a conformal prediction interval around the IPA P80 in addition to the point estimate. The band reports `lower`, `upper`, and `half_width` at 80% nominal coverage. **When a submitted estimate sits outside this band, that is direct evidence for an optimism-bias finding** stronger than the median-percentile comparison alone. "Your P80 of £180m sits below the IPA reference-class P80 (£215m) AND outside the 80%-coverage conformal interval (£198m–£234m). The reference class supports a band that excludes your estimate — please explain why this project is materially different from the comparable population" is a defensible written challenge.
+
+**`_quality.potential_hallucinations`** — When `true` on a generated gate review summary or self-assessment narrative, the assurance reviewer cannot rely on the document as written. Ask Claude to regenerate, or treat the prose as a draft requiring source verification before incorporation into your formal report.
+
+**L5 rejection envelope** — Occasionally a generated document is replaced with `{"error": "guardrail_rejected", ...}`. This is by design: the deterministic policy has detected overclaim or template-leak language. Regenerate with cleaner inputs; never present a rejection payload as content.
+
+For the underlying framework and the audit-chain mechanism that records every gate readiness decision, see [Verified Autonomy overview](../verified-autonomy-overview.md).
+
+---
+
 ## Your most useful tools
 
 | Tool | What it does for you | When most useful |
@@ -51,6 +67,8 @@ This combination — assurance reviewer system prompt plus the gate readiness re
 | `search_knowledge_base` | Searches for project-type-specific precedents and failure modes | Domain-specific challenge preparation |
 | `get_gate_readiness_history` | Shows readiness trend over the last three assessments | Deterioration detection, trajectory assessment |
 | `compare_gate_readiness` | Compares current readiness to previous assessment | Progress testing, identifying declining dimensions |
+| `evaluate_calibration` | Measures Expected Calibration Error of past forecast/outcome pairs — quantifies whether the programme team's stated confidence has historically matched reality | Optimism-bias evidence, dimension-specific calibration findings, Treasury-grade challenge on the credibility of stated DCAs |
+| `route_outputs_to_review` | Applies the four-tier escalation router (EXPERT_REQUIRED / DETAILED_REVIEW / SPOT_CHECK / NONE) to the assurance narrative itself — flags whether the AI-generated gate review summary needs expert review before the panel sees it | Quality-controlling your own pre-review report before the gate panel reads it |
 
 ---
 
@@ -158,6 +176,8 @@ Claude returns a divergence report:
 
 **Reference class context:** The programme's schedule estimate places it at the P35 percentile for comparable Digital/ICT projects at Gate 3 — meaning 65% of comparable projects take longer than this programme is currently forecasting. The cost estimate is at P42. Both estimates are below the P50 (median) for this project type, which is consistent with optimism bias in the baseline.
 
+**Groundedness check on the self-assessment narrative:** Claude's `detect_narrative_divergence` analysis returns `_groundedness: {verdict: "UNGROUNDED", overall_score: 0.62, ungrounded_terms: ["accelerated", "exemplary", "ahead"]}`. The three flagged terms appear in the programme's self-assessment in places where the underlying data tells a different story: integration is "accelerated" when it is eight weeks behind baseline; benefits realisation is "exemplary" when two of seven benefits are at risk; the schedule is "ahead" when the AI forecast places P80 eleven weeks late. These three words become specific written findings — not subjective challenges but evidence-grounded ones the programme team has to answer for in the panel session.
+
 **How to use it**
 
 The divergence between Amber/Green and what the data shows is now documented with specific evidence for each dimension. In the review, present these findings as questions rather than accusations — the programme team may have information that explains the divergence, and you need to test that. For each divergence, ask: "Your self-assessment rates this dimension Amber/Green. Our independent data shows [specific finding]. What evidence supports your rating?"
@@ -221,6 +241,42 @@ These eight questions are your panel's working agenda. Distribute them before th
 The evidence requests are what you ask for before or at the start of the review. If the programme cannot produce the listed evidence in the review session, that is a finding in itself — not evidence of failure, but evidence of governance gaps. Frame each request as: "We would like to see [specific document] to satisfy ourselves on this point. Can you make that available?"
 
 After the review, use the questions and the programme's responses as the basis for your condition and recommendation wording. A question that the programme team could not answer credibly becomes a condition; a question where their answer was credible but needs to be followed through becomes a recommendation.
+
+---
+
+### Example 4: A submitted P80 sits outside the IPA reference-class conformal band
+
+**Scenario**
+
+Project Delta has submitted a £180m P80 cost estimate at Gate 3 in support of its business case. It is an IT_AND_DIGITAL programme of comparable scale to the IPA reference class. You suspect optimism bias. The platform's `run_reference_class_check` now returns not just the median/P80 comparison but a conformal interval around the IPA P80 — and you can use this as direct evidence in your written challenge.
+
+**What to ask Claude**
+
+> Project Delta has submitted a £180m P80 at Gate 3 for an IT_AND_DIGITAL transformation. Run the reference class check and tell me whether their estimate sits within the conformal band for comparable projects.
+
+**What Claude does behind the scenes**
+
+Claude calls `run_reference_class_check(project_type="IT_AND_DIGITAL", estimate_type="cost", submitted_value=180_000_000)`. The response now carries both the traditional percentile-based comparison and the new conformal interval:
+
+1. The point comparison: IPA median is £160m, IPA P80 is £215m, submitted £180m sits at the P42 percentile
+2. The optimism-bias flag (already present in the tool): TRUE, because £180m is below the IPA median of £160m... wait, it's above. The flag fires because P42 is below P50. Either way the point comparison is the first signal.
+3. The new conformal band: `_calibration.band: {lower: 198_000_000, upper: 234_000_000, half_width: 18_000_000}` at 80% coverage. The submitted £180m sits **outside the lower bound of £198m**.
+
+**The output**
+
+Claude returns a structured cost-credibility finding:
+
+- **Point comparison:** Submitted P80 of £180m sits at the P42 percentile of the IPA reference class for comparable IT_AND_DIGITAL programmes. The optimism-bias flag is `TRUE`: 58% of comparable projects experience worse cost outcomes than this estimate assumes.
+- **Conformal interval (NEW):** The 80%-coverage band for the IPA reference-class P80 is **£198m to £234m**. The submitted £180m sits £18m below the lower bound of the band. The IPA reference class does NOT support a P80 below £198m at 80% coverage.
+- **Recommended written finding:** "The programme's submitted P80 of £180m sits below the IPA reference-class P80 (£215m) AND outside the lower bound of the 80%-coverage conformal interval (£198m–£234m) for comparable IT_AND_DIGITAL programmes. The IPA reference class does not support this estimate at standard coverage assumptions. The programme is required to either (a) provide quantified evidence that this project is materially different from the comparable population in a way that justifies a lower P80, or (b) revise the estimate to fall within the supported band before proceeding to Gate 4."
+
+**How to use it**
+
+The conformal interval is the upgrade over the traditional percentile check. A P42 finding gets challenged with "yes, but median means 50/50 — we have plans to be in the better half." That argument is much harder to sustain when the estimate is below the lower bound of the 80%-coverage interval. The reviewer can now say with technical precision: "Your estimate is not just below the median — it is in a region of the cost distribution that 80% of comparable projects do not occupy." That is a finding the programme team must answer with quantified, evidence-based reasoning. Optimism bias by assertion is no longer sufficient.
+
+Write the finding into your gate review report as a Condition (not a Recommendation) — the cost estimate as submitted is outside the supported reference-class band, and the programme cannot proceed to Gate 4 until either the estimate is revised or specific, evidence-grounded differentiation is documented.
+
+For the underlying L4 conformal-prediction primitive and how the band is synthesised from IPA descriptive statistics, see the L4 section of [Verified Autonomy overview](../verified-autonomy-overview.md).
 
 ---
 

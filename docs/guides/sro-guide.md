@@ -30,6 +30,22 @@ If you are also using a research prompt (see below), paste the research prompt a
 
 ---
 
+## Reading Verified Autonomy response annotations
+
+Every AI-authored response the platform sends back to you now carries machine-checked trust signals alongside the prose. These tell you, before you read the substance, how much weight to put on what Claude has produced. You do not need to understand the underlying framework — you just need to know what to do when you see them.
+
+**`_groundedness`** — How well the prose is anchored in your project data. The field carries a verdict (`GROUNDED` or `UNGROUNDED`), an overall score, and a list of `ungrounded_terms`. The ungrounded terms are words that appear in Claude's prose but have no source in your data. **When the verdict is `UNGROUNDED`, or when the ungrounded-terms list is non-empty in a board-ready document, ask Claude to identify which sentence each term came from.** Those sentences are the ones to challenge — they are the most likely place the model has invented something rather than synthesised it from your evidence.
+
+**`_quality`** — A composite quality score and the boolean `potential_hallucinations`. When `potential_hallucinations` is `true`, do not include the document in a board pack unredacted. Ask Claude to regenerate with stricter grounding, or escalate to the programme team for source verification.
+
+**`_calibration`** — When you ask for a cost or schedule forecast, the response carries a conformal interval (`band.lower` to `band.upper`). This is the range the platform thinks the true outcome will fall in, with 80% coverage. **Lead with the band, not the point estimate**, when presenting at the board. A wide band is itself a strategic signal — the programme has high uncertainty and the board should know.
+
+**L5 rejection** — Occasionally a generated report is replaced with a structured error JSON of the form `{"error": "guardrail_rejected", ...}`. This means the AI's output failed a deterministic policy check (overclaim, template leak). The original prose is suppressed by design. Ask Claude to regenerate with revised inputs; do not attempt to render the rejection payload as content.
+
+For the full framework background see [Verified Autonomy overview](../verified-autonomy-overview.md).
+
+---
+
 ## Your most useful tools
 
 You do not call these tools directly. Claude uses them based on what you ask. This table tells you what is happening behind the scenes and when each tool is most relevant.
@@ -46,6 +62,7 @@ You do not call these tools directly. Claude uses them based on what you ask. Th
 | `run_reference_class_check` | Places your cost or schedule position in the context of comparable historical projects | Justifying variance, challenging optimism bias |
 | `check_confidence_divergence` | Flags where stated confidence exceeds what the evidence supports | Pre-review assurance, IPA preparation |
 | `generate_narrative` | Produces a DCA narrative in the format expected for GMPP quarterly returns | OGP quarterly returns, CDEL submissions |
+| `route_outputs_to_review` | Tells you, before you read a generated report, whether it needs expert review (`EXPERT_REQUIRED`), a full read (`DETAILED_REVIEW`), spot-check (`SPOT_CHECK`), or auto-process (`NONE`) — based on outliers in the underlying confidence scores | Reviewing board pack inputs, deciding which generated reports need programme team verification before you read them |
 
 ---
 
@@ -92,9 +109,11 @@ Claude produces an executive summary structured for direct use in a board briefi
 - **Cost:** Spend is £12.3m against a £14.0m approved budget for this phase. CPI is 0.91 — slightly over budget but within the 10% tolerance threshold. Estimate at Completion is £48.2m against a BAC of £46.5m. Contingency is 62% consumed.
 - **Top three risks:** (1) Supplier delivery risk on the integration milestone — currently unmitigated, risk owner has not updated in six weeks. (2) Ministerial timeline pressure creating scope creep in the final delivery phase. (3) Dependency on another department's API that is not yet confirmed for the Q2 date.
 
+At the bottom of the response, two trust-signal annotations: `_groundedness: {verdict: "GROUNDED", overall_score: 0.91, ungrounded_terms: ["accelerated"]}` and `_quality: {potential_hallucinations: false, overall_score: 0.83}`. The summary is well-anchored in your project data, but the word "accelerated" appears in the cost narrative without source backing — worth asking the programme team about before you use that framing at the board.
+
 **How to use it**
 
-The output tells you what to lead with at the board and what questions to anticipate. The DCA rating is your headline. The two at-risk benefits give you the substance of a benefits discussion if pressed. The cost position tells you whether you are being asked to explain a variance — if CPI is 0.91, expect a finance question and have the narrative ready. The unmitigated supplier risk is the item most likely to generate a challenge: make sure you have a named action and owner to present. If you want to go deeper on any area before Thursday, ask Claude to run the Schedule and Cost Health Review research prompt for the full EV picture.
+The output tells you what to lead with at the board and what questions to anticipate. The DCA rating is your headline. The two at-risk benefits give you the substance of a benefits discussion if pressed. The cost position tells you whether you are being asked to explain a variance — if CPI is 0.91, expect a finance question and have the narrative ready. The unmitigated supplier risk is the item most likely to generate a challenge: make sure you have a named action and owner to present. The `_groundedness` annotation tells you the underlying analysis is sound; the single ungrounded term tells you which word in the prose not to repeat without verification. If you want to go deeper on any area before Thursday, ask Claude to run the Schedule and Cost Health Review research prompt for the full EV picture.
 
 ---
 
@@ -171,6 +190,40 @@ Claude produces a formatted gate review report with:
 **How to use it**
 
 The DCA and conditions tell you whether you should seek to defer the gate. If you have two blocking conditions that cannot be resolved in six weeks, the honest answer is to request a deferral — attending a gate with known blocking conditions and an Amber-Red DCA puts you in a worse position than deferring and resolving them. The recommended actions give you the immediate work plan. Assign each action to a named individual with accountability to you. The dimension ratings tell you where the gate review team will focus their questioning — brief your programme director on the Governance and Assurance and Financials dimensions specifically. If you want to track progress against the conditions in the weeks before the gate, ask Claude to re-run the gate readiness assessment each week and show the change.
+
+---
+
+### Example 4: A board exception report flags a potential hallucination
+
+**Scenario**
+
+You ask Claude to generate next week's board exception report for Project Gamma. The response comes back as markdown — but when you scan the trust-signal annotations at the bottom you see `_quality: {potential_hallucinations: true}` and the `_groundedness.ungrounded_terms` list contains three words you did not expect: "accelerated", "exemplary", "secured". You need to decide whether to use the document as-is, challenge the programme team, or ask Claude to redraft.
+
+**What to ask Claude**
+
+> The board exception report for Gamma has `potential_hallucinations: true` and three ungrounded terms — accelerated, exemplary, secured. Show me the sentences each of those terms came from and tell me whether the underlying claim is supported by the project data.
+
+**What Claude does behind the scenes**
+
+Claude does not need to re-run the full report. It walks the prose against the stored project data and isolates the claim each ungrounded term anchors:
+
+1. Inspects the original report it produced (held in the conversation context)
+2. Calls `get_project_summary(project_id="gamma")`, `get_benefits_health(project_id="gamma")`, and `get_risk_register(project_id="gamma")` to confirm what the underlying data actually says
+3. For each ungrounded term, identifies the sentence and reports whether the claim is supported by the data, contradicted, or simply not addressed
+
+**The output**
+
+Claude returns a one-page diagnostic:
+
+- **"accelerated"** appears in: *"The integration workstream has accelerated against baseline."* The store shows the integration workstream is **eight weeks behind** baseline, not ahead. The claim is **contradicted by the data** — this is overoptimism that should be removed before the board sees the report.
+- **"exemplary"** appears in: *"Benefits realisation has been exemplary across all categories."* The store shows seven of nine benefits on track and two at risk. The claim **overstates the position** — accurate framing would be "broadly on track with two benefits at risk".
+- **"secured"** appears in: *"Funding is secured to completion."* The store shows contingency at 62% consumed with a residual risk exposure of £1.8m that is not fully covered. The claim is **not supported** — accurate framing is "current funding covers the central forecast with residual contingency under pressure".
+
+The follow-up: Claude offers to regenerate the board exception report with the ungrounded claims removed and the underlying data substituted.
+
+**How to use it**
+
+Three terms, three different failure modes — a contradiction, an overstatement, and an unsupported assertion. The contradiction (`accelerated`) would have been a personal credibility risk at the board if you had read it aloud. The overstatement and the unsupported assertion are the kind of phrases programme teams produce under board-week pressure and that an SRO is expected to catch. Ask Claude to regenerate the report and use the regenerated version. If this pattern repeats across multiple reports from the same programme, that is itself a delivery confidence signal — book a meeting with the programme director to discuss why the programme's self-narrative is consistently more positive than the underlying data. As the deterministic guardrail's failure mode is the kind of overclaim language the IPA challenges most, this annotation is your first line of defence against an embarrassing board moment.
 
 ---
 
