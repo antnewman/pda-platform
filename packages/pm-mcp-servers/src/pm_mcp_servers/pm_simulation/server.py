@@ -243,6 +243,111 @@ def _days_to_date(start_date: str, days: int) -> str:
     return result.strftime("%Y-%m-%d")
 
 
+def _build_conformal_bands(
+    store: Any,
+    project_id: str,
+    simulation_type: str,
+    p50_days: float,
+    p80_days: float,
+    alpha: float = 0.2,
+    min_history: int = 5,
+) -> dict[str, Any]:
+    """Return a `_calibration` dict for a schedule simulation result.
+
+    Reads the project's calibration history (past forecast vs actual
+    residuals) from the store and runs A4's
+    :func:`conformal_predict_band` on the P50 and P80 point estimates.
+    When fewer than ``min_history`` residuals are available, returns a
+    NOT_COMPUTED marker — a band fitted on too few residuals would
+    overstate the coverage guarantee.
+
+    Args:
+        store: AssuranceStore instance.
+        project_id: Project identifier.
+        simulation_type: ``"schedule"`` for Monte Carlo schedule sims.
+        p50_days: The simulation's P50 point estimate.
+        p80_days: The simulation's P80 point estimate.
+        alpha: Target miscoverage rate. Default 0.2 (80% nominal
+            coverage, matching the paper's reference).
+        min_history: Minimum residual count below which bands are not
+            fitted. Default 5; below this the empirical quantile is
+            too noisy to be meaningful.
+
+    Returns:
+        Dict with ``status`` (``"COMPUTED"`` or ``"NOT_COMPUTED"``),
+        ``alpha``, ``coverage_pct``, plus when computed
+        ``p50_band`` and ``p80_band`` each as
+        ``{"lower": float, "upper": float, "half_width": float}``.
+    """
+    coverage_pct = round((1.0 - alpha) * 100, 1)
+    try:
+        residuals_p50 = store.get_simulation_residuals(
+            project_id, simulation_type, quantile_label="P50"
+        )
+        residuals_p80 = store.get_simulation_residuals(
+            project_id, simulation_type, quantile_label="P80"
+        )
+    except Exception as exc:
+        return {
+            "status": "NOT_COMPUTED",
+            "reason": f"Calibration history lookup failed: {exc}",
+            "alpha": alpha,
+            "coverage_pct": coverage_pct,
+        }
+
+    p50_values = [float(r["residual"]) for r in residuals_p50]
+    p80_values = [float(r["residual"]) for r in residuals_p80]
+
+    if len(p50_values) < min_history or len(p80_values) < min_history:
+        return {
+            "status": "NOT_COMPUTED",
+            "reason": (
+                f"Insufficient calibration history: need at least "
+                f"{min_history} residuals per quantile; have "
+                f"{len(p50_values)} P50 and {len(p80_values)} P80. "
+                "Record past (forecast, actual) pairs via "
+                "AssuranceStore.upsert_simulation_residual to build "
+                "calibration history."
+            ),
+            "alpha": alpha,
+            "coverage_pct": coverage_pct,
+            "p50_history_count": len(p50_values),
+            "p80_history_count": len(p80_values),
+        }
+
+    # Deferred — calibration module pulls in scipy lazily.
+    from agent_planning.calibration import conformal_predict_band
+
+    p50_low, p50_high = conformal_predict_band(
+        point_estimate=p50_days,
+        calibration_residuals=p50_values,
+        alpha=alpha,
+    )
+    p80_low, p80_high = conformal_predict_band(
+        point_estimate=p80_days,
+        calibration_residuals=p80_values,
+        alpha=alpha,
+    )
+
+    return {
+        "status": "COMPUTED",
+        "alpha": alpha,
+        "coverage_pct": coverage_pct,
+        "p50_band": {
+            "lower": p50_low,
+            "upper": p50_high,
+            "half_width": (p50_high - p50_low) / 2.0,
+        },
+        "p80_band": {
+            "lower": p80_low,
+            "upper": p80_high,
+            "half_width": (p80_high - p80_low) / 2.0,
+        },
+        "p50_history_count": len(p50_values),
+        "p80_history_count": len(p80_values),
+    }
+
+
 def _compute_risk_multiplier(risks: list[dict]) -> float:
     """Derive a risk uncertainty multiplier from a list of risk records.
 
@@ -442,6 +547,22 @@ async def _run_schedule_simulation(arguments: dict[str, Any]) -> list[TextConten
         "interpretation": interpretation,
         "run_at": run_at,
     }
+
+    # ── Layer 4: conformal prediction bands ─────────────────────────────
+    # If the store has a calibration history (past forecast vs actual
+    # residuals) for this project's schedule simulations, wrap the P50
+    # and P80 outputs in coverage-guaranteed bands using
+    # `conformal_predict_band`. If no history exists, surface a clear
+    # NOT_COMPUTED marker rather than fabricating an uncalibrated band
+    # — the consumer then knows to start recording actuals via
+    # `upsert_simulation_residual`.
+    result["_calibration"] = _build_conformal_bands(
+        store=store,
+        project_id=project_id,
+        simulation_type="schedule",
+        p50_days=p50_days,
+        p80_days=p80_days,
+    )
 
     # Audit-chain entry — the decision is a coarse confidence band
     # derived from the baseline-vs-P50 relationship. Output captures
