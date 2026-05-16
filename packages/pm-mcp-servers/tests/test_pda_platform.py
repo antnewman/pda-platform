@@ -3451,3 +3451,82 @@ class TestPortfolioSummaryGroundedness:
         # Per-source citation scores — one entry per project.
         per_source = gnd["per_source_citation_scores"]
         assert any(k.startswith("project_PORT-L6-") for k in per_source.keys())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_lessons_section (issue #52 / B17)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestLessonsSectionGroundedness:
+    """L6 appends a groundedness footer to the lessons section markdown
+    on all three return paths (no-lessons template, deterministic
+    fallback, Claude-authored narrative). The sources are the stored
+    lesson rows themselves."""
+
+    def _seed_lessons(self, project_id: str, lessons: list[dict]):
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        for lesson in lessons:
+            row = {
+                "id": lesson["id"],
+                "project_id": project_id,
+                "document_type": lesson.get("document_type", "GATE_REVIEW"),
+                "category": lesson.get("category", "GENERAL"),
+                "title": lesson.get("title", "Untitled"),
+                "root_cause": lesson.get("root_cause", "Not recorded"),
+                "recommendation": lesson.get("recommendation", "Not recorded"),
+                "severity": lesson.get("severity", "MEDIUM"),
+                "extracted_at": "2026-05-16T07:00:00",
+            }
+            store.upsert_project_lesson(row)
+
+    async def test_fallback_path_carries_groundedness_footer(self, monkeypatch):
+        """The deterministic fallback markdown should produce a footer
+        with verdict, score, and (machine-readable) HTML-comment block."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        self._seed_lessons(
+            "LESSONS-L6-001",
+            [
+                {
+                    "id": "L-L6-1",
+                    "title": "Engage suppliers early",
+                    "category": "PROCUREMENT",
+                    "severity": "HIGH",
+                    "root_cause": "Late supplier engagement delayed bid evaluation.",
+                    "recommendation": "Initiate market engagement six months before tender.",
+                }
+            ],
+        )
+        result = await call_tool(
+            "generate_lessons_section", {"project_id": "LESSONS-L6-001"}
+        )
+        text = result[0].text
+        assert "Groundedness:" in text
+        assert "<!-- _groundedness:" in text
+        start = text.index("<!-- _groundedness:") + len("<!-- _groundedness:")
+        end = text.index("-->", start)
+        gnd = _json.loads(text[start:end].strip())
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+        # Per-source scores include the lesson row keyed by id.
+        per_source = gnd["per_source_citation_scores"]
+        assert "lessons_corpus" in per_source
+        assert "lesson_L-L6-1" in per_source
+
+    async def test_no_lessons_template_marks_not_computed(self, monkeypatch):
+        """The no-lessons template has nothing to ground against —
+        the footer says so explicitly rather than silently skipping
+        the annotation."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "generate_lessons_section", {"project_id": "LESSONS-L6-EMPTY"}
+        )
+        text = result[0].text
+        # Special "not computed" message appears.
+        assert "Groundedness: not computed" in text
