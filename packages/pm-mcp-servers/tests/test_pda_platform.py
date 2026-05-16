@@ -2500,3 +2500,112 @@ class TestBenefitsNarrativeGuardrail:
         result = _apply_benefits_narrative_guardrail(leaked)
         payload = _json.loads(result[0].text)
         assert payload["error"] == "guardrail_rejected"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_portfolio_summary (issue #42 / B7)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPortfolioSummaryGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    generate_portfolio_summary.
+
+    Same markdown-output shape as B1 (board report) and B3 (gate review)
+    so the test goes via the call_tool dispatcher with Claude
+    monkeypatched. Adds portfolio-specific phrases ("all green",
+    "no concerns identified") that catch the LLM-evasion failure
+    mode common to multi-project rollups.
+    """
+
+    def _seed_two_minimal_projects(self):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        project_ids = ["PORT-G-001", "PORT-G-002"]
+        for pid in project_ids:
+            store.upsert_risk(
+                {
+                    "id": f"{pid}-R001",
+                    "project_id": pid,
+                    "title": "Test portfolio risk",
+                    "description": "Seeded for B7.",
+                    "category": "DELIVERY",
+                    "likelihood": 3,
+                    "impact": 3,
+                    "risk_score": 9,
+                    "status": "OPEN",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        return project_ids
+
+    async def test_clean_portfolio_summary_passes_through_as_markdown(
+        self, monkeypatch
+    ):
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=2000: (
+                "# Portfolio Summary — Test Portfolio\n\n"
+                "Three projects under review. Mixed delivery confidence; "
+                "active risk management in place across all assets."
+            ),
+        )
+
+        pids = self._seed_two_minimal_projects()
+        result = await call_tool(
+            "generate_portfolio_summary",
+            {"project_ids": pids, "portfolio_name": "Test Portfolio"},
+        )
+        text = result[0].text
+        assert text.startswith("#")
+        assert "Portfolio Summary" in text
+        assert "guardrail_rejected" not in text
+        assert "L5 guardrail flagged" not in text
+
+    async def test_portfolio_overclaim_phrase_triggers_rejection(
+        self, monkeypatch
+    ):
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=2000: (
+                "# Portfolio Summary — Test Portfolio\n\n"
+                "All projects are showing all green RAG ratings with "
+                "no concerns identified at this stage."
+            ),
+        )
+
+        pids = self._seed_two_minimal_projects()
+        result = await call_tool(
+            "generate_portfolio_summary",
+            {"project_ids": pids, "portfolio_name": "Test Portfolio"},
+        )
+        text = result[0].text
+        # Original LLM-evasion prose suppressed.
+        assert "RAG ratings with" not in text
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        assert "portfolio summary" in payload["message"]
