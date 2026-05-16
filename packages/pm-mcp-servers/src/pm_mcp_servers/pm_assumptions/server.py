@@ -29,6 +29,86 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for assumption-report generation
+# ─────────────────────────────────────────────────────────────────────────
+# The assumption report is the executive-facing artefact for the
+# pm-assumptions module. It is referenced in board papers and external
+# signal dashboards, so the same overclaim and template-leak protections
+# we apply to the board exception report apply here.
+#
+# Today the report's narratives are deterministic (composed from
+# templates in code). The guardrail is still useful as a regression
+# guard against future drift where someone might wire an LLM into the
+# narrative path or accept user-supplied prose.
+_ASSUMPTION_REPORT_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_assumption_report_guardrail(report: dict) -> list[TextContent]:
+    """Run the assembled assumption-report dict through the L5 policy.
+
+    The check is applied to the full report serialised as a single
+    string, so a forbidden phrase appearing in any field — top-level
+    narrative, nested executive-summary text, per-assumption action,
+    cascade narrative, governance action — fires regardless of where
+    it appears. This avoids brittle per-field rule lists.
+
+    APPROVED: original JSON returned unchanged.
+    FLAGGED: ``_guardrail_flags`` added to the report dict, original
+        fields preserved.
+    REJECTED: structured error JSON returned; the original report is
+        suppressed so a consumer cannot accidentally render it.
+    """
+    full_text = json.dumps(report, default=str)
+    result = evaluate({"document": full_text}, _ASSUMPTION_REPORT_POLICY)
+
+    if result.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": result.verdict.value,
+                        "message": (
+                            "Generated assumption report contained one or more "
+                            "phrases forbidden by the L5 deterministic policy. "
+                            "Inspect `triggered` for the failing rules; the "
+                            "original report has been suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in result.triggered],
+                        "evaluations": [e.to_dict() for e in result.evaluations],
+                    }
+                ),
+            )
+        ]
+    if result.verdict == Verdict.FLAGGED:
+        report = dict(report)
+        report["_guardrail_flags"] = result.to_dict()
+    return [TextContent(type="text", text=json.dumps(report, indent=2, default=str))]
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -1632,7 +1712,7 @@ async def _generate_assumption_report(arguments: dict) -> list[TextContent]:
             ),
         }
 
-        return [TextContent(type="text", text=json.dumps(report, indent=2, default=str))]
+        return _apply_assumption_report_guardrail(report)
 
     except Exception as exc:
         import traceback
