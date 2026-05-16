@@ -1173,6 +1173,20 @@ Be specific. If DCA ratings are mostly AMBER, say so. Identify systemic issues h
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
+    # L6: sources span every project's data plus the per-project
+    # scorecard metrics. One source per project keeps the per-source
+    # citation scores informative — a reviewer can see which project's
+    # data each fragment of the narrative is supported by.
+    portfolio_sources: list[dict[str, Any]] = [
+        {"id": "per_project_scorecard", "content": project_table},
+    ]
+    for pid, pdata in all_data.items():
+        portfolio_sources.append(
+            {"id": f"project_{pid}", "content": json.dumps(pdata, default=str)}
+        )
+    document = _attach_groundedness_to_markdown(
+        document, portfolio_sources, query=prompt,
+    )
     return _apply_document_guardrail(
         document, _PORTFOLIO_SUMMARY_POLICY, "portfolio summary"
     )
