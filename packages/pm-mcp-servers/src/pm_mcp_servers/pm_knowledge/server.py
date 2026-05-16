@@ -19,6 +19,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._audit import record_decision
 from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
@@ -26,6 +27,35 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain for pm-knowledge decisions
+# ─────────────────────────────────────────────────────────────────────────
+
+_AUDIT_MODULE = "pm_knowledge"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
 
 from .knowledge_base import (
     BENCHMARK_DATA,
@@ -466,6 +496,23 @@ async def _run_reference_class_check(arguments: dict[str, Any]) -> list[TextCont
         },
         "interpretation": interpretation,
     }
+    # Audit-chain entry — the decision is whether optimism bias is
+    # flagged, and the percentile that drove that classification.
+    _safe_record_decision(
+        input_data={
+            "project_type": project_type,
+            "estimate_type": estimate_type,
+            "submitted_value": submitted_value,
+        },
+        output_data={
+            "approximate_percentile": approx_percentile,
+            "optimism_bias_risk": optimism_bias_risk,
+            "median": median,
+            "p80": p80,
+        },
+        decision="OPTIMISM_BIAS_FLAGGED" if optimism_bias_risk else "WITHIN_RANGE",
+        action="run_reference_class_check",
+    )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
@@ -662,6 +709,25 @@ async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextC
             "reason": "No questions emitted; nothing to ground.",
         }
 
+    # Audit-chain entry — record the gate + risk-flag inputs and the
+    # number of questions produced. The decision captures whether any
+    # questions were emitted at all (NO_QUESTIONS for the
+    # empty-flags, no-gate-match case).
+    _safe_record_decision(
+        input_data={
+            "gate": gate,
+            "risk_flags": risk_flags,
+        },
+        output_data={
+            "question_count": result["question_count"],
+        },
+        decision=(
+            "QUESTIONS_EMITTED"
+            if result["question_count"] > 0
+            else "NO_QUESTIONS"
+        ),
+        action="generate_premortem_questions",
+    )
     return _apply_premortem_questions_guardrail(result)
 
 

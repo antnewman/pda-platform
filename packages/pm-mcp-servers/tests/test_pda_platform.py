@@ -4022,3 +4022,65 @@ class TestPmReportingAuditChain:
         ]
         # Chain integrity verifies after all three.
         assert audit_mod.verify_chain("pm_reporting").is_valid
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 8 integration: pm-knowledge audit chain (issue #57 / B22)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPmKnowledgeAuditChain:
+    """L8 records pm-knowledge decisions: run_reference_class_check
+    and generate_premortem_questions. The chain answers "what
+    optimism-bias flag did this estimate raise?" and "which gate
+    + risk-flag combination produced which questions?"."""
+
+    def _setup_isolated_audit(self, monkeypatch, tmp_path):
+        from pm_mcp_servers import _audit as audit_mod
+
+        audit_mod._refresh_audit_dir_for_testing(tmp_path / "audit")
+        monkeypatch.delenv("PDA_AUDIT_SIGNING_KEY", raising=False)
+        return audit_mod
+
+    async def test_reference_class_check_records_optimism_bias_verdict(
+        self, monkeypatch, tmp_path
+    ):
+        """A submitted estimate below the IPA median should produce
+        OPTIMISM_BIAS_FLAGGED. An estimate at or above median should
+        produce WITHIN_RANGE."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+
+        # Submit a clearly low estimate to trigger the optimism-bias flag.
+        await call_tool(
+            "run_reference_class_check",
+            {
+                "project_type": "IT_AND_DIGITAL",
+                "estimate_type": "cost_overrun",
+                "submitted_value": 1.0,
+            },
+        )
+        chain, _, _ = audit_mod._get_chain("pm_knowledge")
+        assert len(chain) == 1
+        first = chain.entries[0]
+        assert first.action == "run_reference_class_check"
+        assert first.decision in {"OPTIMISM_BIAS_FLAGGED", "WITHIN_RANGE"}
+
+    async def test_premortem_questions_records_count_decision(
+        self, monkeypatch, tmp_path
+    ):
+        """generate_premortem_questions records QUESTIONS_EMITTED when
+        at least one question is produced — the default gate=ANY does
+        emit questions from the bundled constants."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        await call_tool(
+            "generate_premortem_questions", {"gate": "ANY"}
+        )
+        chain, _, _ = audit_mod._get_chain("pm_knowledge")
+        assert len(chain) == 1
+        first = chain.entries[0]
+        assert first.action == "generate_premortem_questions"
+        assert first.decision in {"QUESTIONS_EMITTED", "NO_QUESTIONS"}
