@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pm-mcp-servers"
-version = "1.2.0"
+version = "2.0.0"
 description = "126 MCP tools across 18 modules for UK government IPA Gate Review assurance. Risk registers, Monte Carlo simulation, narrative divergence detection, earned value, benefits realisation, lessons learned, gate readiness, calibration evaluation, and escalation routing."
 readme = "README.md"
 license = {text = "MIT"}
@@ -47,7 +47,7 @@ classifiers = [
 
 dependencies = [
     "mcp>=1.20.0,<=1.25.0",
-    "pm-data-tools>=1.0.0",
+    "pm-data-tools>=1.0.0,<3.0.0",
     "uvicorn>=0.20.0,<1.0.0",
     "starlette>=0.27.0,<0.40.0",
     "anthropic>=0.18.0,<1.0.0",

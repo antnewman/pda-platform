@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pda-platform"
-version = "1.2.0"
+version = "2.0.0"
 description = "126 MCP tools for UK government IPA Gate Review assurance. Connects Claude to schedule analysis, risk registers, Monte Carlo simulation (with conformal intervals), narrative divergence detection, lessons learned, gate readiness, calibration evaluation, and four-tier escalation routing. Implements the nine-layer Verified Autonomy framework end-to-end."
 readme = "README.md"
 license = {text = "MIT"}
@@ -50,17 +50,17 @@ classifiers = [
 # Installing pda-platform pulls in everything needed to run the
 # unified 126-tool MCP server.
 dependencies = [
-    "agent-task-planning>=0.2.0,<2.0.0",
-    "pm-data-tools>=1.0.0,<2.0.0",
-    "pm-mcp-servers>=1.0.0,<2.0.0",
+    "agent-task-planning>=0.2.0,<3.0.0",
+    "pm-data-tools>=1.0.0,<3.0.0",
+    "pm-mcp-servers>=1.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
 # Full install including AI mining and optional LLM clients
 full = [
-    "agent-task-planning[mining,anthropic]>=0.2.0,<2.0.0",
-    "pm-data-tools[all]>=1.0.0,<2.0.0",
-    "pm-mcp-servers>=1.0.0,<2.0.0",
+    "agent-task-planning[mining,anthropic]>=0.2.0,<3.0.0",
+    "pm-data-tools[all]>=1.0.0,<3.0.0",
+    "pm-mcp-servers>=1.0.0,<3.0.0",
 ]
 
 [project.urls]
