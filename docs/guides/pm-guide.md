@@ -31,6 +31,22 @@ For deeper analysis of schedule and cost health, combine the PM system prompt wi
 
 ---
 
+## Reading Verified Autonomy response annotations
+
+When you ask Claude for a schedule forecast, an EV summary, or a risk-register refresh, the response now carries machine-checked trust signals as additional fields. They are short, structured, and give you specific operational information you can act on.
+
+**`_calibration` on schedule and cost forecasts** — When you run `forecast_completion` or `run_schedule_simulation`, the response carries a `_calibration.p50_band` and `_calibration.p80_band` — each with `lower`, `upper`, and `half_width`. These are conformal prediction intervals based on the project's history of forecast-versus-actual residuals. **The band is your planning range, not the point estimate.** A wide P80 half-width (more than 4 weeks on a 6-month forecast) tells you your team's previous forecasts have been materially wrong; budget the upper bound for resource planning, not the headline P80 date. When `_calibration.status` is `NOT_COMPUTED`, the project has no stored residuals yet — start recording (forecast, actual) pairs after each milestone to build calibration history.
+
+**`_groundedness`** — Carries a verdict (`GROUNDED` / `UNGROUNDED`) and a list of `ungrounded_terms` — words that appear in Claude's prose but have no source in your project data. If a risk-register refresh or mitigation suggestion contains ungrounded terms, those are the lines to check before they go into the register.
+
+**`_quality.potential_hallucinations`** — When `true`, do not paste the analysis into your monthly board pack without verification. Ask Claude to regenerate with stricter grounding, or check the suggested mitigations against your operational knowledge before accepting them.
+
+**L5 rejection** — Occasionally a generated risk narrative or AI mitigation comes back as `{"error": "guardrail_rejected", ...}` — a deterministic policy block. The original prose is suppressed by design. Regenerate with cleaner inputs rather than trying to render the rejection envelope.
+
+For the underlying framework see [Verified Autonomy overview](../verified-autonomy-overview.md).
+
+---
+
 ## Your most useful tools
 
 | Tool | What it does for you | When most useful |
@@ -48,6 +64,7 @@ For deeper analysis of schedule and cost health, combine the PM system prompt wi
 | `analyse_change_pressure` | Quantifies the cumulative schedule and cost impact of approved changes | Change control review, baseline reforecast |
 | `compare_baseline` | Schedule and cost variance versus the approved baseline | Variance reporting, rebaseline decisions |
 | `suggest_mitigations` | AI-suggested mitigations for your top open risks | Risk register refresh, mitigation planning |
+| `evaluate_calibration` | Measures whether the team's previous forecasts predicted actual outcomes — returns Expected Calibration Error (ECE) plus reliability-diagram bins | Quarterly forecasting health check, post-milestone retrospective, validating whether stated SPI/CPI confidence is reliable |
 
 ---
 
@@ -134,7 +151,7 @@ Claude calls five tools:
 
 Claude returns an integrated slip analysis:
 
-**Forecast completion:** P50 is 14 April — six weeks beyond the Q2 planned date of 28 February. P80 is 3 June, eleven weeks late. The AI forecast is based on current SPI trajectory; it assumes no recovery action.
+**Forecast completion:** P50 is 14 April — six weeks beyond the Q2 planned date of 28 February. P80 is 3 June, eleven weeks late. The AI forecast is based on current SPI trajectory; it assumes no recovery action. `_calibration.p80_band` reports lower 13 May, upper 24 June (half-width 21 days) at 80% nominal coverage — that is the range you should plan against, not the headline P80 date.
 
 **Drivers of the slip:** The integration workstream accounts for 73% of the schedule variance. Within the integration workstream, three tasks are responsible for the bulk of the delay: API configuration (5 weeks behind), system testing (not yet started, was planned to have started 3 weeks ago), and sign-off by the third-party vendor (no date confirmed). All three sit on the critical path.
 
@@ -191,6 +208,40 @@ Send the stale risk list to risk owners today with a 48-hour deadline to update 
 R-14 with no owner is a register quality failure — someone registered it and walked away. Assign an owner in the meeting and record that the AI-suggested mitigation has been reviewed and either adopted or replaced with a documented alternative.
 
 At the board, present the stale register score as a finding you are actively resolving, not a problem you discovered at the last minute. The action plan is the evidence that you are on top of it.
+
+---
+
+### Example 4: A schedule forecast carries a wider conformal band than expected
+
+**Scenario**
+
+You are preparing for next Tuesday's go/no-go on the Phase 3 milestone. You run `run_schedule_simulation` to confirm the P80 delivery date. The simulation returns a P80 of 12 June — comfortably ahead of the 30 June commitment. But the `_calibration.p80_band` carries a half-width of 8 weeks: the band lower is 17 April, upper is 7 August. The simulation says 12 June; the calibrated band says the true outcome will fall somewhere between mid-April and early August with 80% confidence. You need to understand whether to trust the headline number or plan against the band.
+
+**What to ask Claude**
+
+> The P80 from the schedule simulation is 12 June but the calibration band is 17 April to 7 August. Why is the band so wide? Pull the residual history and tell me what is driving it.
+
+**What Claude does behind the scenes**
+
+The wide band signals that the project's past forecasts have been wrong by large margins. Claude reads the calibration history:
+
+1. Inspects the `_calibration` field returned by the simulation
+2. Calls the store directly via Claude's analytical tools to retrieve the project's `simulation_residuals` (the (forecast, actual) pairs recorded after each prior milestone)
+3. Reports the residual distribution: mean, range, and how many residuals support the current band
+
+**The output**
+
+Claude returns a calibration retrospective:
+
+- **Residual history:** 7 prior schedule forecasts recorded. Mean P80 residual: +43 days (actuals consistently 6 weeks later than forecast). Largest residual: +71 days. Range: -8 days (one early delivery) to +71 days. The mean residual is 6 weeks late, so the conformal band correctly reports a wide upper bound.
+- **Pattern:** The team's forecasts have been systematically too optimistic. Of the 7 milestones, 6 delivered later than P80. The optimism is concentrated in workstreams that depend on third-party vendor sign-off — vendor delays account for 4 of the 5 worst residuals.
+- **Implication:** The simulation's headline P80 of 12 June reflects today's plan. The conformal band — 17 April to 7 August — reflects what tends to happen to this team's forecasts under the same conditions. The upper bound (7 August) is more than five weeks beyond the 30 June commitment.
+
+**How to use it**
+
+Three operational moves. **First**, replan against the upper band, not the headline. If the upper bound is 7 August and the commitment is 30 June, you have a 5-week gap to close — that is a board-grade item, not a workstream-lead conversation. **Second**, name the failure mode in your replan: vendor sign-off is the dominant residual driver, so the recovery plan needs a named vendor escalation path, not just an internal sprint. **Third**, track the band, not just the point estimate, on every subsequent forecast. The wide band is the platform telling you "this team's forecasts are not yet reliable" — narrowing the band requires either better forecasting (record more (forecast, actual) pairs and run `evaluate_calibration` to see if ECE improves) or genuinely reducing uncertainty in the schedule itself. Until the band narrows, plan against the band.
+
+For the underlying conformal-prediction primitive and the implications for governance, see the L4 section of [Verified Autonomy overview](../verified-autonomy-overview.md).
 
 ---
 

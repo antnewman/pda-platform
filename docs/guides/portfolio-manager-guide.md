@@ -30,6 +30,24 @@ For deeper cross-portfolio analysis, the most effective approach is to run the F
 
 ---
 
+## Reading Verified Autonomy response annotations
+
+Every AI-authored output the platform produces now carries machine-checked trust signals. At portfolio level these are particularly useful because they let you triage where to direct limited assurance resource without reading every individual project's report end-to-end.
+
+**`route_outputs_to_review`** — Run across the portfolio (one call per project), this returns one of four verdicts per project: `EXPERT_REQUIRED` / `DETAILED_REVIEW` / `SPOT_CHECK` / `NONE`. The verdict is based on outliers in each project's assumption-confidence scores OR low overall confidence, with an OR fail-safe — any single outlier in a project's outputs routes it to expert review regardless of headline confidence. **The verdict distribution across the portfolio tells you, in one view, where to direct your next four weeks of assurance attention.**
+
+**`_groundedness` and `ungrounded_terms`** — When you ask Claude to generate a portfolio summary or cross-project comparison narrative, the response carries `_groundedness` annotations. The aggregate score across the portfolio is itself a systemic signal: if half your projects' generated narratives come back with `UNGROUNDED` verdicts, the issue is not with one programme team but with the quality of underlying project data being submitted across the portfolio.
+
+**`_quality.potential_hallucinations`** — When `true` on a portfolio summary you are taking to investment committee, do not present the narrative unverified. Ask Claude to identify which projects' data drove the hallucination flag — there will usually be one or two projects whose data fed the unsupported assertion.
+
+**`_calibration` bands on comparative forecasts** — Cross-portfolio schedule and cost comparisons increasingly use the conformal bands rather than point estimates. A portfolio where every project's `_calibration.p80_band.half_width` is large is a portfolio in systemic uncertainty — useful framing for an investment committee.
+
+**L5 rejection** — Occasionally a generated portfolio summary comes back as `{"error": "guardrail_rejected", ...}`. Regenerate with cleaner inputs; never present a rejection envelope as content to an investment committee.
+
+For the full framework background see [Verified Autonomy overview](../verified-autonomy-overview.md).
+
+---
+
 ## Your most useful tools
 
 | Tool | What it does for you | When most useful |
@@ -46,6 +64,7 @@ For deeper cross-portfolio analysis, the most effective approach is to run the F
 | `get_critical_resources` | Returns the key individuals and skills whose absence would affect multiple projects | Key-person risk, succession planning |
 | `get_risk_velocity` | Tracks risk acceleration by project — identifies which projects' risk profiles are deteriorating fastest | Assurance prioritisation, early warning |
 | `detect_stale_risks` | Flags projects with stale risk registers — a governance quality indicator | ARMM compliance, assurance prioritisation |
+| `route_outputs_to_review` | Returns one of `EXPERT_REQUIRED` / `DETAILED_REVIEW` / `SPOT_CHECK` / `NONE` per project, based on assumption-confidence outliers or low overall confidence with an OR fail-safe | Triaging across the portfolio: which projects need expert review before investment committee, which can be spot-checked, which can auto-process |
 
 ---
 
@@ -189,6 +208,47 @@ The ranking gives you an evidence-based justification for the allocation decisio
 For Project Epsilon, the Departmental Assurance Review should focus on three things: the benefits case (is it still viable?), the risk management quality (why are so many risks accelerating without mitigation?), and the ARMM maturity (Level 0 means the assurance framework does not exist — this is systemic). Ask the review team to use the Full Gate Readiness Analysis research prompt as their preparation tool.
 
 For Project Gamma, schedule a conversation with the project board chair two weeks before the gate to discuss the readiness position. If the gap between current readiness (58%) and the gate threshold cannot be closed in six weeks, deferral is the responsible course. The platform's gate readiness trend data will tell you whether readiness is improving fast enough to make the gate viable.
+
+As a follow-up to this prioritisation, run `route_outputs_to_review` across the five projects before the next investment committee. The four-tier verdict per project tells you which of the generated portfolio summaries need expert review before the committee reads them — distinct from but complementary to the composite-risk ranking above. A project ranked low for assurance need but whose generated narrative is flagged `EXPERT_REQUIRED` warrants a different intervention: better data discipline, not more assurance review.
+
+---
+
+### Example 4: Routing portfolio reports to review before the investment committee
+
+**Scenario**
+
+You have an investment committee in seven days. You will be presenting six projects' generated portfolio summaries plus the aggregate portfolio narrative. You need to know which of the six reports need expert review before the committee reads them — and where to direct the limited assurance attention available in the week before the IC.
+
+**What to ask Claude**
+
+> Run `route_outputs_to_review` across all six projects in my portfolio. Tell me the verdict per project and the reason, and tell me how to triage my week before the investment committee.
+
+**What Claude does behind the scenes**
+
+Claude calls `route_outputs_to_review` once per project (six calls). Each returns a `RoutingDecision` carrying a four-tier level, a plain-English reason, the consensus and confidence figures that drove it, and any outlier reports.
+
+**The output**
+
+Claude returns a triage summary:
+
+- **Project Alpha** — `NONE`. Confidence 0.86, no outliers in stored assumption-confidence scores. The generated summary for Alpha can go to the IC unreviewed.
+- **Project Beta** — `SPOT_CHECK`. Confidence 0.72, no outliers. Periodic-sampling appropriate; you can spot-check a couple of sections rather than reading end-to-end.
+- **Project Gamma** — `DETAILED_REVIEW`. Confidence 0.54, no outliers. The aggregate confidence is in the detailed-review band — a human reads every section before the IC sees it.
+- **Project Delta** — `EXPERT_REQUIRED`. Confidence 0.82, but ONE outlier: assumption D-007 (third-party API readiness) sits 4.3 IQR below the project consensus. The OR fail-safe routes Delta to expert review on the strength of that one outlier alone, even though overall confidence is healthy. The reason string makes it explicit: "EXPERT_REQUIRED: 1 statistical outlier(s) detected. Confidence 0.82 alone would not have escalated, but the OR fail-safe routes any outlier to a domain expert."
+- **Project Epsilon** — `EXPERT_REQUIRED`. Confidence 0.31. Low confidence alone meets the EXPERT_REQUIRED threshold (< 0.4). The summary cannot go to the IC unreviewed.
+- **Project Zeta** — `EXPERT_REQUIRED`. Confidence 0.66, but TWO outliers: assumptions Z-003 and Z-011 sit well below consensus. Outliers AND borderline confidence; both triggers fire.
+
+The portfolio summary itself returns `_groundedness: GROUNDED, overall_score: 0.78` — the cross-portfolio narrative is well-supported by the project-level data, so the aggregate framing can go to the IC as-is.
+
+**How to use it**
+
+The week before the IC now has a clear shape. **Three projects need expert review (Delta, Epsilon, Zeta) — two from outliers, one from low confidence.** Direct your independent reviewer's time at these three. For Delta, the assurance question is narrow: assumption D-007 (third-party API readiness) is the outlier — verify whether the project has acted on it, and update the narrative either to reflect remediation or to escalate the dependency to the IC. For Epsilon, the low overall confidence means the narrative needs to be challenged section-by-section before the IC sees it; this is the kind of project where the generated summary risks understating the position. For Zeta, both outliers and borderline confidence — strongest candidate for a full pre-IC scrutiny session with the programme team.
+
+Project Gamma's `DETAILED_REVIEW` verdict means you read its summary end-to-end yourself, but you do not need to deploy independent assurance time. Alpha and Beta auto-process and spot-check respectively — the summary text can go to the IC unmodified.
+
+This is the value of the four-tier router at portfolio level: rather than treating all six projects as equal in your week before the IC, you have an evidence-based prioritisation that directs assurance attention where the OR fail-safe says it is most needed. The reason strings make every routing decision defensible if challenged — the IC can ask "why did Alpha go through unreviewed?" and the answer is on the record.
+
+For the underlying four-tier router and the OR fail-safe rationale, see the L2 section of [Verified Autonomy overview](../verified-autonomy-overview.md).
 
 ---
 
