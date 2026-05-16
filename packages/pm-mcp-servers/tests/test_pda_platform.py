@@ -2722,3 +2722,127 @@ class TestLessonsSectionGuardrail:
         payload = _json.loads(text)
         assert payload["error"] == "guardrail_rejected"
         assert "lessons section" in payload["message"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_pir_template (issue #44 / B9)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPirTemplateGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    generate_pir_template.
+
+    Critical edge case: the PIR template DELIBERATELY embeds
+    ``[PLACEHOLDER]`` markers throughout (sign-off names, outstanding
+    actions, etc.). The PIR-specific policy therefore omits
+    ``[placeholder]`` from the forbidden-phrase list, otherwise every
+    legitimately-generated PIR would falsely reject.
+
+    Two tests below cover:
+    1. The `[PLACEHOLDER]`-rich legitimate output passes through.
+    2. A genuine PIR-specific failure mode ("all benefits delivered"
+       when data shows otherwise) is rejected.
+    """
+
+    def _seed_minimal_project(self, project_id: str = "PIR-GUARDRAIL-TEST"):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Test risk for PIR guardrail",
+                "description": "Seeded for B9 regression test.",
+                "category": "DELIVERY",
+                "likelihood": 4,
+                "impact": 4,
+                "risk_score": 16,
+                "status": "CLOSED",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_placeholder_rich_pir_passes_through_unchanged(
+        self, monkeypatch
+    ):
+        """The PIR template deliberately embeds ``[PLACEHOLDER]``
+        markers for human-completion fields. The guardrail must NOT
+        treat these as template-leak — that is the entire point of
+        having a PIR-specific policy distinct from the board/gate
+        policy. This test is the key correctness check for B9."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=4000: (
+                "# Post-Implementation Review — PIR-PLACE-001\n\n"
+                "**Closure Date:** 2026-05-01  **Prepared by:** [PLACEHOLDER — name]\n\n"
+                "## 1. Project Overview\n"
+                "Substantive content here.\n\n"
+                "## 8. Outstanding Actions\n"
+                "| Action | Owner | Target Date |\n"
+                "|---|---|---|\n"
+                "| [PLACEHOLDER] | [PLACEHOLDER] | [PLACEHOLDER] |\n"
+            ),
+        )
+
+        project_id = self._seed_minimal_project("PIR-PLACE-001")
+        result = await call_tool(
+            "generate_pir_template", {"project_id": project_id}
+        )
+        text = result[0].text
+        # Markdown shape preserved with [PLACEHOLDER] markers intact —
+        # confirming the policy correctly excludes them.
+        assert text.startswith("#")
+        assert "[PLACEHOLDER]" in text
+        assert "Post-Implementation Review" in text
+        assert "guardrail_rejected" not in text
+        assert "L5 guardrail flagged" not in text
+
+    async def test_pir_overclaim_phrase_triggers_rejection(self, monkeypatch):
+        """When Claude emits "all benefits delivered" (the PIR-specific
+        failure mode where the LLM hallucinates a successful close-out
+        regardless of the underlying data), the guardrail rejects the
+        document."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=4000: (
+                "# Post-Implementation Review — PIR-REJECT-001\n\n"
+                "## 5. Benefits Delivery\n"
+                "All benefits delivered on time and to budget."
+            ),
+        )
+
+        project_id = self._seed_minimal_project("PIR-REJECT-001")
+        result = await call_tool(
+            "generate_pir_template", {"project_id": project_id}
+        )
+        text = result[0].text
+        # Original LLM-hallucinated prose suppressed.
+        assert "on time and to budget" not in text
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert "PIR template" in payload["message"]

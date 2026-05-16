@@ -106,6 +106,34 @@ _PORTFOLIO_SUMMARY_POLICY = [
     ),
 ]
 
+# PIR Template — Post-Implementation Review. The PIR deliberately
+# embeds `[PLACEHOLDER]` markers throughout (sign-off names, outstanding
+# actions, etc.) so the common `[placeholder]` phrase MUST be excluded
+# from this policy or every PIR would falsely reject. The genuine
+# template-leak failure modes here are differently-shaped: the LLM
+# leaving scaffolding instructions visible, or emitting "INSERT PIR
+# SECTION HERE" rather than substantive content.
+_PIR_TEMPLATE_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            *_COMMON_OVERCLAIM_PHRASES,
+            # Deliberately NOT inheriting _COMMON_TEMPLATE_LEAK_PHRASES
+            # because the PIR uses `[PLACEHOLDER]` markers by design.
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "INSERT PIR SECTION HERE",
+            "TODO before submission",
+            "TBD before submission",
+            # PIR-specific failure mode: the LLM hallucinating a
+            # success when the data shows otherwise.
+            "all benefits realised",
+            "all benefits delivered",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
 GATE_NAMES = {
     0: "Strategic Assessment",
     1: "Business Justification",
@@ -1149,7 +1177,9 @@ Flag where data gaps exist rather than inventing numbers."""
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
-    return [TextContent(type="text", text=document)]
+    return _apply_document_guardrail(
+        document, _PIR_TEMPLATE_POLICY, "PIR template"
+    )
 
 
 async def _export_sro_dashboard_data(arguments: dict[str, Any]) -> list[TextContent]:
