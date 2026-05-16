@@ -22,6 +22,7 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
+from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
@@ -56,6 +57,74 @@ _LESSONS_SECTION_POLICY = [
         severity=Severity.BLOCK,
     ),
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness footer for the lessons section
+# ─────────────────────────────────────────────────────────────────────────
+# The lessons section's "answer" is the markdown document. Its
+# "sources" are the stored lesson rows (the raw data the section
+# claims to summarise). We append a visible groundedness footer +
+# HTML-comment JSON block — same shape as B10's pm-reporting footer.
+
+
+def _build_lessons_sources(lessons: list[dict]) -> list[dict[str, object]]:
+    """One source per lesson row, plus a combined-corpus source.
+
+    Per-lesson sources let the per_source_citation_scores identify
+    which specific lesson supports which fragment of the section.
+    The corpus source is the union, used as the high-level reference.
+    """
+    sources: list[dict[str, object]] = []
+    if not lessons:
+        return sources
+    sources.append(
+        {
+            "id": "lessons_corpus",
+            "content": json.dumps(lessons, default=str),
+        }
+    )
+    for lesson in lessons:
+        lid = lesson.get("id") or "lesson"
+        sources.append(
+            {
+                "id": f"lesson_{lid}",
+                "content": json.dumps(lesson, default=str),
+            }
+        )
+    return sources
+
+
+def _attach_groundedness_to_lessons_section(
+    document: str,
+    lessons: list[dict],
+) -> str:
+    """Append a groundedness footer to the lessons-section markdown."""
+    sources = _build_lessons_sources(lessons)
+    if not document.strip():
+        return document
+    if not sources:
+        return (
+            document
+            + "\n\n---\n*Groundedness: not computed — no lessons in "
+            "the store to ground against.*\n"
+        )
+    result = compute_groundedness(
+        document, sources, query="generate_lessons_section"
+    )
+    rd = result.to_dict()
+    terms = rd.get("ungrounded_terms", []) or []
+    terms_preview = ", ".join(terms[:8])
+    if len(terms) > 8:
+        terms_preview += f", … (+{len(terms) - 8} more)"
+    if not terms_preview:
+        terms_preview = "(none)"
+    human_line = (
+        f"*Groundedness: {rd['overall_score']:.2f} ({rd['verdict']}). "
+        f"Ungrounded terms: {terms_preview}*"
+    )
+    machine_block = "<!-- _groundedness: " + json.dumps(rd, default=str) + " -->"
+    return f"{document}\n\n---\n{human_line}\n\n{machine_block}\n"
 
 
 def _apply_lessons_section_guardrail(document: str) -> list[TextContent]:
@@ -640,6 +709,7 @@ async def _generate_lessons_section(arguments: dict[str, Any]) -> list[TextConte
             "Once lessons are stored, re-run `generate_lessons_section` to produce "
             "a formatted section ready for inclusion in your report.\n"
         )
+        template = _attach_groundedness_to_lessons_section(template, lessons)
         return _apply_lessons_section_guardrail(template)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -654,7 +724,11 @@ async def _generate_lessons_section(arguments: dict[str, Any]) -> list[TextConte
                 f"**Root cause:** {lesson.get('root_cause', 'Not recorded')}\n\n"
                 f"**Recommendation:** {lesson.get('recommendation')}\n"
             )
-        return _apply_lessons_section_guardrail("\n".join(fallback_lines))
+        fallback_document = "\n".join(fallback_lines)
+        fallback_document = _attach_groundedness_to_lessons_section(
+            fallback_document, lessons
+        )
+        return _apply_lessons_section_guardrail(fallback_document)
 
     # Trim to max_lessons — prioritise by severity.
     severity_key = lambda l: _SEVERITY_ORDER.get(l.get("severity", "LOW"), 0)
@@ -686,6 +760,7 @@ async def _generate_lessons_section(arguments: dict[str, Any]) -> list[TextConte
             )
         ]
 
+    narrative = _attach_groundedness_to_lessons_section(narrative, lessons)
     return _apply_lessons_section_guardrail(narrative)
 
 
