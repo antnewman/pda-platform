@@ -86,6 +86,26 @@ _GATE_REVIEW_POLICY = [
     ),
 ]
 
+# Portfolio Summary — portfolio-committee-facing rollup across many
+# projects. The systemic-risk paragraph is the highest-stakes section;
+# the policy rejects overclaim and template leaks just like the board
+# report.
+_PORTFOLIO_SUMMARY_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            *_COMMON_OVERCLAIM_PHRASES,
+            *_COMMON_TEMPLATE_LEAK_PHRASES,
+            # Portfolio-specific: a summary that asserts "all green" or
+            # "no concerns" across a portfolio is almost always either a
+            # template default or an LLM evasion. Treat as block.
+            "all green",
+            "no concerns identified",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
 GATE_NAMES = {
     0: "Strategic Assessment",
     1: "Business Justification",
@@ -1017,7 +1037,9 @@ Be specific. If DCA ratings are mostly AMBER, say so. Identify systemic issues h
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
-    return [TextContent(type="text", text=document)]
+    return _apply_document_guardrail(
+        document, _PORTFOLIO_SUMMARY_POLICY, "portfolio summary"
+    )
 
 
 async def _generate_pir_template(arguments: dict[str, Any]) -> list[TextContent]:
