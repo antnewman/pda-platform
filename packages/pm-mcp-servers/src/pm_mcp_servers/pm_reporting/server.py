@@ -1299,6 +1299,11 @@ Flag where data gaps exist rather than inventing numbers."""
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
+    document = _attach_groundedness_to_markdown(
+        document,
+        _build_groundedness_sources(project_data),
+        query=prompt,
+    )
     return _apply_document_guardrail(
         document, _PIR_TEMPLATE_POLICY, "PIR template"
     )
