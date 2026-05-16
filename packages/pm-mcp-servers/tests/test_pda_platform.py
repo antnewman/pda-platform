@@ -3303,3 +3303,76 @@ class TestPremortemQuestionsGroundedness:
         # plumbing reads from the live module-level constant rather
         # than a frozen import-time copy.
         assert gnd["verdict"] == "GROUNDED"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_benefits_narrative (issue #50 / B15)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestBenefitsNarrativeGroundedness:
+    """L6 measures how well the Claude-authored benefits narrative is
+    grounded in the benefits-register context. Test the integration
+    entry point directly since the full tool requires Anthropic API."""
+
+    def test_grounded_narrative_carries_groundedness_field(self):
+        from pm_mcp_servers.pm_brm.server import (
+            _attach_groundedness_to_benefits_output,
+        )
+
+        output = {
+            "project_id": "BRM-L6-001",
+            "narrative_text": (
+                "The programme will realise efficiency benefits by FY27, "
+                "with automation contributing measurable drawdown."
+            ),
+            "confidence": 0.72,
+        }
+        context = {
+            "total_benefit_count": 12,
+            "health_score": 78,
+            "aggregate_realisation_pct": 0.42,
+            "at_risk_count": 2,
+            "benefits_summary": (
+                "Programme efficiency benefits realisation automation "
+                "tranche FY27 measurable drawdown."
+            ),
+        }
+        new_output = _attach_groundedness_to_benefits_output(output, context)
+        assert "_groundedness" in new_output
+        gnd = new_output["_groundedness"]
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+        assert "provenance_trail" in gnd
+
+    def test_hallucinated_benefit_term_appears_in_ungrounded_terms(self):
+        from pm_mcp_servers.pm_brm.server import (
+            _attach_groundedness_to_benefits_output,
+        )
+
+        output = {
+            "project_id": "BRM-L6-002",
+            "narrative_text": (
+                "The programme will realise zeppelin benefits by FY27."
+            ),
+        }
+        context = {
+            "total_benefit_count": 12,
+            "health_score": 78,
+            "benefits_summary": "Programme efficiency 45M FY27.",
+        }
+        new_output = _attach_groundedness_to_benefits_output(output, context)
+        gnd = new_output["_groundedness"]
+        # "zeppelin" doesn't appear in context.
+        assert "zeppelin" in gnd["ungrounded_terms"]
+
+    def test_no_context_produces_not_computed_verdict(self):
+        from pm_mcp_servers.pm_brm.server import (
+            _attach_groundedness_to_benefits_output,
+        )
+
+        output = {
+            "project_id": "BRM-L6-NOCTX",
+            "narrative_text": "Test narrative.",
+        }
+        new_output = _attach_groundedness_to_benefits_output(output, {})
+        assert new_output["_groundedness"]["verdict"] == "NOT_COMPUTED"
