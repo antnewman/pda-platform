@@ -2201,3 +2201,118 @@ class TestGateReviewSummaryGuardrail:
 
         payload = _json.loads(result[0].text)
         assert payload["error"] == "guardrail_rejected"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: detect_narrative_divergence (issue #39 / B4)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestNarrativeDivergenceGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    pm_analyse.detect_narrative_divergence.
+
+    The tool requires ANTHROPIC_API_KEY at runtime, so a full end-to-end
+    rejection test would need a stubbed Anthropic SDK. We instead test
+    the integration's pure-Python entry point — `_apply_narrative_
+    divergence_guardrail` — which is what the tool's success path
+    calls. The entry point captures all of the behaviour that matters:
+    a clean result is returned unchanged; a forbidden phrase anywhere
+    in the serialised result triggers REJECTED with the original
+    analysis suppressed.
+    """
+
+    def test_clean_result_passes_through_unchanged(self):
+        from pm_mcp_servers.pm_analyse.tools import (
+            _apply_narrative_divergence_guardrail,
+        )
+
+        clean = {
+            "project_id": "TEST-001",
+            "overall_assessment": "ALIGNED",
+            "divergence_score": 0.0,
+            "claims_assessed": 3,
+            "contradictions": 0,
+            "flags": [],
+            "supported_claims": [
+                {"claim": "Project on schedule", "evidence": "Latest gate AMBER"},
+            ],
+            "unverifiable_claims": [],
+            "data_used": ["risks", "gate_readiness"],
+            "data_gaps": [],
+        }
+        result = _apply_narrative_divergence_guardrail(clean)
+        # Clean result returned unchanged — no error, no annotation.
+        assert result == clean
+        assert "_guardrail_flags" not in result
+        assert "error" not in result
+
+    def test_forbidden_phrase_in_flag_explanation_triggers_rejection(self):
+        from pm_mcp_servers.pm_analyse.tools import (
+            _apply_narrative_divergence_guardrail,
+        )
+
+        dirty = {
+            "project_id": "TEST-002",
+            "overall_assessment": "DIVERGENT",
+            "divergence_score": 0.6,
+            "claims_assessed": 2,
+            "contradictions": 1,
+            "flags": [
+                {
+                    "claim": "We are 100% certain delivery is on track",
+                    "verdict": "CONTRADICTED",
+                    "severity": "HIGH",
+                    "evidence": "Gate readiness is RED",
+                    "confidence": 0.9,
+                }
+            ],
+            "supported_claims": [],
+            "unverifiable_claims": [],
+            "data_used": ["risks"],
+            "data_gaps": [],
+        }
+        result = _apply_narrative_divergence_guardrail(dirty)
+
+        # The original analysis is suppressed. The flagged-claim text
+        # (containing the forbidden phrase) must not appear in the
+        # returned dict's payload.
+        import json as _json
+
+        serialised = _json.dumps(result, default=str)
+        assert "delivery is on track" not in serialised
+        # Structured rejection.
+        assert result["error"] == "guardrail_rejected"
+        assert result["verdict"] == "REJECTED"
+        # Message references the document kind.
+        assert "narrative-divergence" in result["message"]
+        triggered_names = [t["rule_name"] for t in result["triggered"]]
+        assert any("forbidden_phrase" in name for name in triggered_names)
+
+    def test_template_leak_in_supported_claim_triggers_rejection(self):
+        """Template-leak phrases in any structured field fire too —
+        demonstrates the value of the whole-result string check vs.
+        per-field rules."""
+        from pm_mcp_servers.pm_analyse.tools import (
+            _apply_narrative_divergence_guardrail,
+        )
+
+        leaked = {
+            "project_id": "TEST-003",
+            "overall_assessment": "MINOR_DIVERGENCE",
+            "divergence_score": 0.2,
+            "claims_assessed": 2,
+            "contradictions": 1,
+            "flags": [],
+            "supported_claims": [
+                {
+                    "claim": "Project status",
+                    "evidence": "INSERT NARRATIVE HERE",
+                }
+            ],
+            "unverifiable_claims": [],
+            "data_used": [],
+            "data_gaps": [],
+        }
+        result = _apply_narrative_divergence_guardrail(leaked)
+        assert result["error"] == "guardrail_rejected"
