@@ -4289,3 +4289,116 @@ class TestEvaluateCalibrationTool:
             assert b["mean_confidence"] is None
             assert b["mean_accuracy"] is None
             assert b["gap"] is None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 4 integration: Monte Carlo conformal bands (issue #60 / B25)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestMonteCarloConformalBands:
+    """L4 wraps run_schedule_simulation's P50/P80 outputs in conformal
+    bands when the store has a calibration history. When no history
+    exists, the response surfaces a NOT_COMPUTED marker rather than
+    fabricating an uncalibrated band."""
+
+    def _seed_residuals(
+        self, project_id: str, count: int = 10, scale: float = 5.0
+    ):
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        for i in range(count):
+            # Symmetric residuals around 0; deterministic.
+            sign = 1 if i % 2 == 0 else -1
+            magnitude = scale * (1 + (i % 3))
+            for label, base in (("P50", 100.0), ("P80", 120.0)):
+                store.upsert_simulation_residual(
+                    {
+                        "id": f"{project_id}-{label}-{i:03d}",
+                        "project_id": project_id,
+                        "simulation_type": "schedule",
+                        "predicted_value": base,
+                        "actual_value": base + sign * magnitude,
+                        "quantile_label": label,
+                    }
+                )
+        return store
+
+    async def test_simulation_without_history_marks_not_computed(self):
+        """A project with no calibration history produces
+        `_calibration.status == "NOT_COMPUTED"`, plus an explanatory
+        reason."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "run_schedule_simulation",
+            {
+                "project_id": "SIM-CB-EMPTY",
+                "baseline_duration_days": 120,
+                "n_simulations": 200,
+                "use_risk_register": False,
+            },
+        )
+        payload = _json.loads(result[0].text)
+        assert "_calibration" in payload
+        calib = payload["_calibration"]
+        assert calib["status"] == "NOT_COMPUTED"
+        assert "Insufficient calibration history" in calib["reason"]
+        assert calib["coverage_pct"] == 80.0
+
+    async def test_simulation_with_history_produces_conformal_bands(self):
+        """With enough residuals seeded, the response carries
+        `_calibration.status == "COMPUTED"` plus P50 and P80 bands
+        symmetric around the simulation's point estimates."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        self._seed_residuals("SIM-CB-WITH", count=10)
+        result = await call_tool(
+            "run_schedule_simulation",
+            {
+                "project_id": "SIM-CB-WITH",
+                "baseline_duration_days": 120,
+                "n_simulations": 200,
+                "use_risk_register": False,
+            },
+        )
+        payload = _json.loads(result[0].text)
+        calib = payload["_calibration"]
+        assert calib["status"] == "COMPUTED"
+        for key in ("p50_band", "p80_band"):
+            band = calib[key]
+            assert "lower" in band
+            assert "upper" in band
+            assert band["upper"] >= band["lower"]
+            assert band["half_width"] >= 0
+        # The history counts surface in the response.
+        assert calib["p50_history_count"] == 10
+        assert calib["p80_history_count"] == 10
+
+    def test_store_round_trips_simulation_residual(self):
+        """The new table accepts upserts and retrieves them filtered
+        by simulation_type + quantile_label."""
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        store.upsert_simulation_residual(
+            {
+                "id": "SIM-CB-STORE-001",
+                "project_id": "SIM-CB-STORE",
+                "simulation_type": "schedule",
+                "predicted_value": 100.0,
+                "actual_value": 108.0,
+                "quantile_label": "P50",
+            }
+        )
+        rows = store.get_simulation_residuals("SIM-CB-STORE", "schedule")
+        ids = {r["id"] for r in rows}
+        assert "SIM-CB-STORE-001" in ids
+        # The residual is computed from predicted/actual when absent.
+        match = next(r for r in rows if r["id"] == "SIM-CB-STORE-001")
+        assert abs(match["residual"] - 8.0) < 1e-9
