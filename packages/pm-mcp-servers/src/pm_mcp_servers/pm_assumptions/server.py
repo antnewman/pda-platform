@@ -2177,7 +2177,7 @@ async def _export_assumption_html_dashboard(arguments: dict) -> list[TextContent
       <span><strong>Project:</strong> {esc(project_id)}</span>
       <span><strong>Report date:</strong> {report_date}</span>
       {f'<span><strong>Gate context:</strong> {esc(gate_label)}</span>' if gate_label else ''}
-      <span><strong>Platform tools:</strong> 125 (18 modules)</span>
+      <span><strong>Platform tools:</strong> 126 (18 modules)</span>
     </div>
   </header>
 

@@ -68,7 +68,7 @@ class TestRegistryModules:
     def test_assure_registry_loads(self):
         from pm_mcp_servers.pm_assure.registry import TOOLS, dispatch
 
-        assert len(TOOLS) == 28
+        assert len(TOOLS) == 29
         assert callable(dispatch)
 
     def test_brm_registry_loads(self):
@@ -175,10 +175,10 @@ class TestToolAggregation:
     """Test that tool aggregation in the unified server is correct."""
 
     def test_total_tool_count(self):
-        """Unified server has exactly 125 tools (6+8+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+8)."""
+        """Unified server has exactly 126 tools (6+8+4+5+29+12+5+2+2+9+5+5+5+8+2+5+6+8)."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
-        assert len(ALL_TOOLS) == 125
+        assert len(ALL_TOOLS) == 126
 
     def test_no_duplicate_tool_names(self):
         """No two tools share the same name across modules."""
@@ -256,7 +256,7 @@ class TestExpectedTools:
         "create_project_from_profile", "export_dashboard_data",
         "export_dashboard_html", "get_armm_report",
         "assess_gate_readiness", "get_gate_readiness_history", "compare_gate_readiness",
-        "scan_for_red_flags",
+        "scan_for_red_flags", "route_outputs_to_review",
     }
 
     EXPECTED_BRM_TOOLS = {
@@ -4479,3 +4479,142 @@ class TestReferenceClassConformalInterval:
         )
         assert result["status"] == "NOT_COMPUTED"
         assert "P80 > median" in result["reason"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 2 integration: route_outputs_to_review tool (issue #62 / B27)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestRouteOutputsToReviewTool:
+    """The new pm-assure `route_outputs_to_review` MCP tool surfaces
+    A5's four-tier escalation router. Reads confidence scores from
+    the store, normalises 0-100 → [0, 1], aggregates, and dispatches
+    to `route`. The OR fail-safe is preserved end-to-end."""
+
+    def _seed_confidence_scores(
+        self, project_id: str, scores: list[float]
+    ):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        # Seed assumptions first (the FK target).
+        for i, score in enumerate(scores):
+            aid = f"{project_id}-A{i:03d}"
+            store.upsert_assumption(
+                {
+                    "id": aid,
+                    "project_id": project_id,
+                    "text": f"Test assumption {i}",
+                    "category": "DELIVERY",
+                    "baseline_value": 1.0,
+                    "current_value": None,
+                    "unit": "boolean",
+                    "tolerance_pct": 0.0,
+                    "source": "Test",
+                    "external_ref": None,
+                    "dependencies": "",
+                    "owner": "Tester",
+                    "last_validated": None,
+                    "created_date": "2026-05-16",
+                    "notes": "",
+                }
+            )
+            store.upsert_assumption_confidence_score(
+                {
+                    "id": f"{aid}-CS",
+                    "project_id": project_id,
+                    "assumption_id": aid,
+                    "score": float(score),
+                    "rag": "GREEN" if score >= 70 else "AMBER" if score >= 40 else "RED",
+                    "review_age_days": 0,
+                    "source_credibility_score": float(score),
+                    "data_backing_score": float(score),
+                    "likelihood_penalty": 1.0,
+                    "explanation": "test seed",
+                }
+            )
+
+    async def test_tool_is_registered_and_routed(self):
+        from pm_mcp_servers.pda_platform.server import ALL_TOOLS
+
+        names = {t.name for t in ALL_TOOLS}
+        assert "route_outputs_to_review" in names
+
+    async def test_no_history_returns_structured_error(self):
+        """A project with no confidence history surfaces a structured
+        error rather than crashing."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "route_outputs_to_review", {"project_id": "ROUTE-EMPTY-001"}
+        )
+        payload = _json.loads(result[0].text)
+        assert "error" in payload
+        assert payload["error"]["code"] == "NO_CONFIDENCE_HISTORY"
+
+    async def test_high_confidence_clean_outputs_route_to_none(self):
+        """Mean confidence around 0.85 and no outliers → level NONE."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        # All scores at 85 (0.85 normalised) — tight cluster, no outlier.
+        self._seed_confidence_scores("ROUTE-CLEAN-001", [85.0] * 6)
+        result = await call_tool(
+            "route_outputs_to_review",
+            {"project_id": "ROUTE-CLEAN-001"},
+        )
+        payload = _json.loads(result[0].text)
+        assert payload["level"] == "NONE"
+        assert payload["triggered_by_outliers"] is False
+        assert payload["triggered_by_confidence"] is False
+        assert payload["sample_size"] == 6
+
+    async def test_low_confidence_routes_to_expert_required(self):
+        """Mean confidence below the expert threshold routes to
+        EXPERT_REQUIRED even when no outlier fires."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        # All scores at 25 (0.25 normalised) — well below 0.4 expert
+        # threshold; tight cluster so no outlier fires.
+        self._seed_confidence_scores("ROUTE-LOW-001", [25.0] * 6)
+        result = await call_tool(
+            "route_outputs_to_review",
+            {"project_id": "ROUTE-LOW-001"},
+        )
+        payload = _json.loads(result[0].text)
+        assert payload["level"] == "EXPERT_REQUIRED"
+        assert payload["triggered_by_confidence"] is True
+
+    async def test_outlier_in_high_confidence_set_still_escalates(self):
+        """OR fail-safe: even with high overall confidence, a single
+        statistical outlier triggers EXPERT_REQUIRED."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        # Five scores around 85, one wildly low — outlier fires.
+        self._seed_confidence_scores(
+            "ROUTE-OUTLIER-001", [85.0, 86.0, 84.0, 87.0, 85.0, 10.0]
+        )
+        result = await call_tool(
+            "route_outputs_to_review",
+            {
+                "project_id": "ROUTE-OUTLIER-001",
+                # Force high overall confidence so the outlier is the
+                # *sole* trigger — proves OR fail-safe behaviour.
+                "confidence_override": 0.95,
+            },
+        )
+        payload = _json.loads(result[0].text)
+        assert payload["level"] == "EXPERT_REQUIRED"
+        assert payload["triggered_by_outliers"] is True
+        assert payload["triggered_by_confidence"] is False

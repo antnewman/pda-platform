@@ -1188,6 +1188,75 @@ ASSURE_TOOLS: list[Tool] = [
                 "required": ["project_id"],
             },
         ),
+        Tool(
+            name="route_outputs_to_review",
+            description=(
+                "Apply the Verified Autonomy §5.3 four-tier escalation "
+                "router to a project's assumption-confidence outputs. "
+                "Reads confidence scores from the store, aggregates them "
+                "into an overall confidence value, and returns one of "
+                "EXPERT_REQUIRED / DETAILED_REVIEW / SPOT_CHECK / NONE "
+                "based on the OR fail-safe (outliers OR low confidence "
+                "each independently trigger escalation). Use this tool "
+                "to decide where a project's outputs need human review "
+                "before they reach a board or gate panel."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project identifier to route.",
+                    },
+                    "confidence_override": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "description": (
+                            "Optional override for the overall confidence "
+                            "input to the router. When omitted, the mean "
+                            "of the project's stored assumption-confidence "
+                            "scores (normalised to [0, 1]) is used."
+                        ),
+                    },
+                    "expert_threshold": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.4,
+                        "description": (
+                            "Confidence below this triggers EXPERT_REQUIRED "
+                            "on confidence alone. Default 0.4 (paper §5.3)."
+                        ),
+                    },
+                    "detailed_threshold": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.6,
+                        "description": (
+                            "Confidence below this (and at-or-above expert) "
+                            "triggers DETAILED_REVIEW. Default 0.6."
+                        ),
+                    },
+                    "spot_threshold": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.8,
+                        "description": (
+                            "Confidence below this (and at-or-above "
+                            "detailed) triggers SPOT_CHECK. Default 0.8."
+                        ),
+                    },
+                    "db_path": {
+                        "type": "string",
+                        "description": "Optional path to the SQLite store.",
+                    },
+                },
+                "required": ["project_id"],
+            },
+        ),
     ]
 
 
@@ -1261,6 +1330,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         return await _compare_gate_readiness(arguments)
     if name == "scan_for_red_flags":
         return await _scan_for_red_flags(arguments)
+    if name == "route_outputs_to_review":
+        return await _route_outputs_to_review(arguments)
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
@@ -3681,6 +3752,131 @@ async def _scan_for_red_flags(arguments: dict[str, Any]) -> list[TextContent]:
         )
         return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
 
+    except Exception as exc:
+        return [TextContent(type="text", text=f"Error: {exc}")]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Tool: route_outputs_to_review (Verified Autonomy Layer 2 / §5.3)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _route_outputs_to_review(arguments: dict[str, Any]) -> list[TextContent]:
+    """Apply A5's four-tier escalation router to a project's outputs.
+
+    Reads the project's stored assumption-confidence scores from the
+    AssuranceStore, normalises them to ``[0, 1]``, aggregates into an
+    overall confidence, and dispatches to
+    :func:`agent_planning.escalation.route`. Returns the
+    :class:`RoutingDecision` shape (level, reason, consensus,
+    outliers, triggered_by_outliers, triggered_by_confidence,
+    thresholds_used).
+
+    The OR fail-safe property of the router is preserved: any
+    outlier OR low confidence routes to EXPERT_REQUIRED. Each
+    independently can fire; both being clean is the only path to
+    NONE.
+
+    When the project has no confidence scores, the response is a
+    structured error with ``code = "NO_CONFIDENCE_HISTORY"``.
+    """
+    try:
+        from pm_data_tools.db.store import AssuranceStore
+
+        project_id: str = arguments["project_id"]
+        confidence_override = arguments.get("confidence_override")
+        expert_threshold = float(arguments.get("expert_threshold", 0.4))
+        detailed_threshold = float(arguments.get("detailed_threshold", 0.6))
+        spot_threshold = float(arguments.get("spot_threshold", 0.8))
+        raw_db_path = arguments.get("db_path")
+        db_path = Path(raw_db_path) if raw_db_path else None
+        store = AssuranceStore(db_path=db_path)
+
+        # Pull assumption-confidence scores. pm-assumptions stores
+        # them on the 0–100 scale; the router expects 0–1.
+        try:
+            score_rows = store.get_assumption_confidence_scores(project_id)
+        except Exception:
+            score_rows = []
+
+        if not score_rows:
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "error": {
+                                "code": "NO_CONFIDENCE_HISTORY",
+                                "message": (
+                                    f"No assumption-confidence scores found for "
+                                    f"project '{project_id}'. Run "
+                                    "score_assumption_confidence first."
+                                ),
+                            }
+                        },
+                        indent=2,
+                    ),
+                )
+            ]
+
+        # Normalise scores from 0–100 to 0–1.
+        raw_scores = [float(r.get("score", 0)) for r in score_rows]
+        normalised = [max(0.0, min(1.0, s / 100.0)) for s in raw_scores]
+        labels = [str(r.get("assumption_id", f"row-{i}")) for i, r in enumerate(score_rows)]
+
+        if confidence_override is not None:
+            overall = max(0.0, min(1.0, float(confidence_override)))
+        else:
+            overall = sum(normalised) / len(normalised) if normalised else 0.0
+
+        # Deferred — escalation module pulls in the confidence sub-
+        # module (and transitively sklearn).
+        from agent_planning.escalation import route
+
+        decision = route(
+            values=normalised,
+            confidence=overall,
+            labels=labels,
+            field_name="confidence",
+            expert_threshold=expert_threshold,
+            detailed_threshold=detailed_threshold,
+            spot_threshold=spot_threshold,
+        )
+        result = decision.to_dict()
+        result["project_id"] = project_id
+        result["sample_size"] = len(normalised)
+
+        _safe_record_decision(
+            input_data={
+                "project_id": project_id,
+                "sample_size": len(normalised),
+                "overall_confidence": overall,
+            },
+            output_data={
+                "level": result["level"],
+                "triggered_by_outliers": result["triggered_by_outliers"],
+                "triggered_by_confidence": result["triggered_by_confidence"],
+                "outlier_count": len(result["outliers"]),
+            },
+            decision=result["level"],
+            action="route_outputs_to_review",
+        )
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except KeyError as exc:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": {
+                            "code": "MISSING_PARAMETER",
+                            "message": f"Required parameter missing: {exc}",
+                        }
+                    }
+                ),
+            )
+        ]
     except Exception as exc:
         return [TextContent(type="text", text=f"Error: {exc}")]
 
