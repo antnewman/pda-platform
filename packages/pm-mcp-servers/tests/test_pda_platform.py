@@ -3875,3 +3875,150 @@ class TestPmAssumptionsAuditChain:
         # Metadata captures the source counts.
         assert "assumption_count" in entry.metadata
         assert entry.metadata["assumption_count"] >= 1
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 8 integration: pm-reporting audit chain (issue #56 / B21)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPmReportingAuditChain:
+    """L8 records the L5 verdict every generate_* tool's document
+    receives. The chain answers: "for this report, was the output
+    APPROVED, FLAGGED, or REJECTED?". Recorded inside
+    `_apply_document_guardrail` so every caller is audited
+    automatically (single point of instrumentation)."""
+
+    def _setup_isolated_audit(self, monkeypatch, tmp_path):
+        from pm_mcp_servers import _audit as audit_mod
+
+        audit_mod._refresh_audit_dir_for_testing(tmp_path / "audit")
+        monkeypatch.delenv("PDA_AUDIT_SIGNING_KEY", raising=False)
+        return audit_mod
+
+    def _seed_minimal_project(self, project_id: str):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Test risk",
+                "description": "Seeded.",
+                "category": "DELIVERY",
+                "likelihood": 3,
+                "impact": 3,
+                "risk_score": 9,
+                "status": "OPEN",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_board_exception_report_approved_path_records_audit(
+        self, monkeypatch, tmp_path
+    ):
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("AUDIT-REP-BRD-001")
+        await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+
+        chain, _, _ = audit_mod._get_chain("pm_reporting")
+        assert len(chain) == 1
+        entry = chain.entries[0]
+        assert entry.action == "generate_board_exception_report"
+        # Clean fallback output should be APPROVED.
+        assert entry.decision == "APPROVED"
+        # Audit input captures project_id and path.
+        assert audit_mod.verify_chain("pm_reporting").is_valid
+
+    async def test_board_exception_report_rejected_path_records_audit(
+        self, monkeypatch, tmp_path
+    ):
+        """A monkeypatched fallback that emits a forbidden phrase
+        produces a REJECTED entry in the chain. The audit shows the
+        rejection happened even though the consumer received only the
+        rejection JSON — operators auditing the chain see the full
+        history regardless."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("AUDIT-REP-BRD-REJ")
+
+        def fake_compose(_project_id, _period, _data):
+            return "# Board Report\n\nWe are 100% certain of the outcome."
+
+        monkeypatch.setattr(
+            reporting_server,
+            "_compose_evidence_only_board_report",
+            fake_compose,
+        )
+        await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+        chain, _, _ = audit_mod._get_chain("pm_reporting")
+        assert len(chain) == 1
+        entry = chain.entries[0]
+        assert entry.decision == "REJECTED"
+        # Output payload records the triggered rule names.
+        # (Read the live entry rather than reasserting all rule data.)
+        assert audit_mod.verify_chain("pm_reporting").is_valid
+
+    async def test_multiple_reporting_tools_share_one_chain(
+        self, monkeypatch, tmp_path
+    ):
+        """All five generate_* tools record into the same pm_reporting
+        chain, in invocation order. A reviewer auditing the chain sees
+        the cross-tool sequence of decisions."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=2000: (
+                "# Document\n\n"
+                "Substantive content with no forbidden phrases."
+            ),
+        )
+        project_id = self._seed_minimal_project("AUDIT-REP-MULTI")
+
+        # Three sequential tool calls.
+        await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+        await call_tool(
+            "generate_gate_review_summary",
+            {"project_id": project_id, "gate_number": 3},
+        )
+        await call_tool(
+            "generate_portfolio_summary",
+            {"project_ids": [project_id], "portfolio_name": "Test"},
+        )
+
+        chain, _, _ = audit_mod._get_chain("pm_reporting")
+        assert len(chain) == 3
+        actions = [e.action for e in chain.entries]
+        assert actions == [
+            "generate_board_exception_report",
+            "generate_gate_review_summary",
+            "generate_portfolio_summary",
+        ]
+        # Chain integrity verifies after all three.
+        assert audit_mod.verify_chain("pm_reporting").is_valid

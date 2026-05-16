@@ -18,6 +18,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._audit import record_decision
 from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
@@ -25,6 +26,64 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain
+# ─────────────────────────────────────────────────────────────────────────
+# All five generate_* handlers in pm-reporting append to the
+# `pm_reporting` chain. The recorded entry captures the L5 guardrail
+# verdict that the document ultimately received — so the chain answers
+# "was this document approved, flagged, or rejected at L5?" without
+# storing the prose itself.
+
+_AUDIT_MODULE = "pm_reporting"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
+
+
+def _classify_l5_verdict_from_payload(text: str) -> str:
+    """Inspect a final tool response payload and return the L5 verdict.
+
+    Markdown responses without a JSON wrapper carry no L5 flag (they
+    passed APPROVED). JSON responses with `error == "guardrail_rejected"`
+    are REJECTED. A JSON payload containing a `_guardrail_flags` field
+    is FLAGGED. This is a thin classifier — the caller has already
+    routed the document through `_apply_document_guardrail`, so the
+    classification is deterministic from the response shape.
+    """
+    if not text or not text.startswith("{"):
+        return "APPROVED"
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return "APPROVED"
+    if isinstance(payload, dict):
+        if payload.get("error") == "guardrail_rejected":
+            return "REJECTED"
+        if "_guardrail_flags" in payload:
+            return "FLAGGED"
+    return "APPROVED"
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -769,7 +828,15 @@ If data is missing for a dimension, note the gap rather than assuming performanc
         query=prompt,
     )
     return _apply_document_guardrail(
-        document, _GATE_REVIEW_POLICY, "gate review summary"
+        document,
+        _GATE_REVIEW_POLICY,
+        "gate review summary",
+        action="generate_gate_review_summary",
+        audit_input={
+            "project_id": project_id,
+            "gate_number": gate_number,
+            "reviewer_name": reviewer_name,
+        },
     )
 
 
@@ -935,6 +1002,11 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
     # labelled fallback, includes the reason.
     sources = _build_groundedness_sources(project_data)
 
+    audit_input_summary = {
+        "project_id": project_id,
+        "reporting_period": reporting_period,
+    }
+
     client = _get_anthropic_client()
     if client is None:
         document = _compose_evidence_only_board_report(
@@ -945,7 +1017,10 @@ async def _generate_board_exception_report(arguments: dict[str, Any]) -> list[Te
         document = _attach_groundedness_to_markdown(
             document, sources, query="evidence-only board exception report"
         )
-        return _apply_board_report_guardrail(document)
+        return _apply_board_report_guardrail(
+            document,
+            audit_input={**audit_input_summary, "path": "fallback"},
+        )
 
     today = date.today().isoformat()
     data_summary = json.dumps(project_data, indent=2, default=str)
@@ -997,13 +1072,19 @@ Rules:
         )
 
     document = _attach_groundedness_to_markdown(document, sources, query=prompt)
-    return _apply_board_report_guardrail(document)
+    return _apply_board_report_guardrail(
+        document,
+        audit_input={**audit_input_summary, "path": "claude"},
+    )
 
 
 def _apply_document_guardrail(
     document: str,
     policy: list,
     document_kind: str,
+    *,
+    action: str | None = None,
+    audit_input: dict | None = None,
 ) -> list[TextContent]:
     """Apply an L5 deterministic guardrail policy to an AI-authored document.
 
@@ -1013,6 +1094,12 @@ def _apply_document_guardrail(
         downstream consumer cannot accidentally render an output that
         contains forbidden phrases (hard fail-safe).
 
+    Also records an L8 audit-chain entry with the L5 verdict, so the
+    chain answers "what verdict did this document receive?" without
+    storing the prose. The recorded entry's ``action`` defaults to
+    ``document_kind`` but callers can pass an explicit ``action``
+    matching the originating tool name (e.g. ``"generate_gate_review_summary"``).
+
     Args:
         document: The generated markdown text.
         policy: List of :class:`Rule` to evaluate against
@@ -1020,9 +1107,26 @@ def _apply_document_guardrail(
         document_kind: Short human-readable name used in the rejection
             error message (e.g. ``"board exception report"``,
             ``"gate review summary"``).
+        action: Optional explicit action label for the audit entry.
+            When ``None``, ``document_kind`` is used.
+        audit_input: Optional input summary for the audit entry
+            (e.g. ``{"project_id": "PROJ-001"}``). When ``None``,
+            recorded as an empty dict.
     """
     result = evaluate({"document": document}, policy)
+    audit_action = action or document_kind
+    audit_input_summary: dict = audit_input or {}
     if result.verdict == Verdict.REJECTED:
+        _safe_record_decision(
+            input_data=audit_input_summary,
+            output_data={
+                "triggered_count": len(result.triggered),
+                "triggered_rules": [e.rule_name for e in result.triggered],
+            },
+            decision="REJECTED",
+            action=audit_action,
+            metadata={"document_kind": document_kind},
+        )
         return [
             TextContent(
                 type="text",
@@ -1052,15 +1156,42 @@ def _apply_document_guardrail(
                 f"> - {triggered.rule_name}: {triggered.message}"
             )
         document = "\n".join(notice_lines) + "\n\n" + document
+        _safe_record_decision(
+            input_data=audit_input_summary,
+            output_data={
+                "triggered_count": len(result.triggered),
+                "triggered_rules": [e.rule_name for e in result.triggered],
+            },
+            decision="FLAGGED",
+            action=audit_action,
+            metadata={"document_kind": document_kind},
+        )
+    else:
+        _safe_record_decision(
+            input_data=audit_input_summary,
+            output_data={"triggered_count": 0},
+            decision="APPROVED",
+            action=audit_action,
+            metadata={"document_kind": document_kind},
+        )
     return [TextContent(type="text", text=document)]
 
 
 # Backward-compatible alias for the board exception report path.
-def _apply_board_report_guardrail(document: str) -> list[TextContent]:
+def _apply_board_report_guardrail(
+    document: str,
+    *,
+    audit_input: dict | None = None,
+) -> list[TextContent]:
     """Apply the board-report guardrail policy. Thin wrapper around the
-    generalised :func:`_apply_document_guardrail`."""
+    generalised :func:`_apply_document_guardrail` that fixes the action
+    label to ``generate_board_exception_report`` for the audit chain."""
     return _apply_document_guardrail(
-        document, _BOARD_REPORT_POLICY, "board exception report"
+        document,
+        _BOARD_REPORT_POLICY,
+        "board exception report",
+        action="generate_board_exception_report",
+        audit_input=audit_input or {},
     )
 
 
@@ -1188,7 +1319,15 @@ Be specific. If DCA ratings are mostly AMBER, say so. Identify systemic issues h
         document, portfolio_sources, query=prompt,
     )
     return _apply_document_guardrail(
-        document, _PORTFOLIO_SUMMARY_POLICY, "portfolio summary"
+        document,
+        _PORTFOLIO_SUMMARY_POLICY,
+        "portfolio summary",
+        action="generate_portfolio_summary",
+        audit_input={
+            "portfolio_name": portfolio_name,
+            "project_ids": project_ids,
+            "project_count": len(project_ids),
+        },
     )
 
 
@@ -1305,7 +1444,14 @@ Flag where data gaps exist rather than inventing numbers."""
         query=prompt,
     )
     return _apply_document_guardrail(
-        document, _PIR_TEMPLATE_POLICY, "PIR template"
+        document,
+        _PIR_TEMPLATE_POLICY,
+        "PIR template",
+        action="generate_pir_template",
+        audit_input={
+            "project_id": project_id,
+            "closure_date": closure_date,
+        },
     )
 
 
