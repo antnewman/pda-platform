@@ -763,6 +763,11 @@ If data is missing for a dimension, note the gap rather than assuming performanc
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
+    document = _attach_groundedness_to_markdown(
+        document,
+        _build_groundedness_sources(project_data),
+        query=prompt,
+    )
     return _apply_document_guardrail(
         document, _GATE_REVIEW_POLICY, "gate review summary"
     )
