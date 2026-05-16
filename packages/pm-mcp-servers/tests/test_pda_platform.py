@@ -1899,3 +1899,154 @@ class TestBoardExceptionReportGuardrail:
 
         payload = _json.loads(result[0].text)
         assert payload["error"] == "guardrail_rejected"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_assumption_report (issue #37 / B2)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestAssumptionReportGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    generate_assumption_report.
+
+    The handler returns a structured JSON report. The integration
+    serialises the whole report to a single string and runs the
+    forbidden-phrase check against it, so a forbidden phrase in any
+    field (nested narratives, per-assumption actions, governance
+    list) fires the guardrail. APPROVED: original JSON. FLAGGED:
+    JSON with ``_guardrail_flags``. REJECTED: structured error JSON.
+    """
+
+    def _seed_assumptions(
+        self,
+        project_id: str = "ASSUMP-GUARDRAIL-TEST",
+        extra_text: str | None = None,
+    ):
+        """Seed enough assumption rows for the report path to produce output.
+
+        The pm-assumptions store schema embeds the likelihood, impact,
+        validation plan and review date in the ``notes`` field as
+        pipe-delimited values; the report handler parses these out at
+        read time. We mirror that here so the test data takes the same
+        shape as a real loaded register.
+        """
+        from datetime import date
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        today = str(date.today())
+        for i in range(3):
+            store.upsert_assumption(
+                {
+                    "id": f"{project_id}-A{i:03d}",
+                    "project_id": project_id,
+                    "text": f"Test assumption {i} for guardrail integration",
+                    "category": "DELIVERY",
+                    "baseline_value": 1.0,
+                    "current_value": None,
+                    "unit": "boolean",
+                    "tolerance_pct": 0.0,
+                    "source": "Internal estimate",
+                    "external_ref": None,
+                    "dependencies": "",
+                    "owner": "Test Owner",
+                    "last_validated": None,
+                    "created_date": today,
+                    "notes": (
+                        "Impact if false: Schedule slippage of two weeks. | "
+                        "Likelihood: MEDIUM | "
+                        "Validation plan: Quarterly review | "
+                        "Status: Open | "
+                        f"Review date: {today}"
+                    ),
+                }
+            )
+        # Optionally inject a fourth assumption whose `text` field
+        # contains caller-supplied content — used by the rejection
+        # test to thread a forbidden phrase through to the report
+        # (the text flows into `recommended_actions[].text` in the
+        # final JSON, so a forbidden phrase here ends up in the
+        # serialised report and triggers the guardrail).
+        if extra_text is not None:
+            store.upsert_assumption(
+                {
+                    "id": f"{project_id}-A999",
+                    "project_id": project_id,
+                    "text": extra_text,
+                    "category": "DELIVERY",
+                    "baseline_value": 1.0,
+                    "current_value": None,
+                    "unit": "boolean",
+                    "tolerance_pct": 0.0,
+                    "source": "Test",
+                    "external_ref": None,
+                    "dependencies": "",
+                    "owner": "Test Owner",
+                    "last_validated": None,
+                    "created_date": today,
+                    "notes": (
+                        "Impact if false: Total project failure | "
+                        "Likelihood: HIGH | "
+                        "Validation plan: Test | "
+                        "Status: Open | "
+                        f"Review date: {today}"
+                    ),
+                }
+            )
+        return project_id
+
+    async def test_clean_report_passes_through_as_json(self):
+        """Default report path produces clean deterministic narratives —
+        none of the forbidden phrases should appear, and the response
+        should be the structured JSON report unchanged."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        project_id = self._seed_assumptions("ASSUMP-GUARDRAIL-CLEAN")
+        result = await call_tool(
+            "generate_assumption_report", {"project_id": project_id}
+        )
+
+        payload = _json.loads(result[0].text)
+        # No guardrail-rejection error.
+        assert "error" not in payload or payload.get("error") != "guardrail_rejected"
+        # No FLAGGED annotation on clean output.
+        assert "_guardrail_flags" not in payload
+        # Standard report shape preserved.
+        assert "executive_summary" in payload
+        assert "top_at_risk_assumptions" in payload
+
+    async def test_forbidden_phrase_anywhere_in_report_triggers_rejection(self):
+        """If a forbidden phrase appears in any field — here injected via
+        an assumption whose `text` flows into the per-assumption action
+        block — the entire report is rejected. Demonstrates the value
+        of serialising the full report and checking that string: the
+        violation fires regardless of which field carries it."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        project_id = self._seed_assumptions(
+            "ASSUMP-GUARDRAIL-REJECT",
+            extra_text="We are 100% certain this assumption will hold",
+        )
+
+        result = await call_tool(
+            "generate_assumption_report", {"project_id": project_id}
+        )
+
+        text = result[0].text
+        payload = _json.loads(text)
+        # The original report is suppressed — the assumption text which
+        # would normally echo into `recommended_actions[].text` must
+        # NOT appear in the response.
+        assert "100% certain this assumption will hold" not in text
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        # At least one rule fired.
+        assert len(payload["triggered"]) >= 1
+        triggered_names = [t["rule_name"] for t in payload["triggered"]]
+        assert any("forbidden_phrase" in name for name in triggered_names)
