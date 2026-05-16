@@ -1,5 +1,9 @@
 """Confidence extraction module for reliable PM data extraction."""
 
+from .aggregation import (
+    compute_overall_confidence,
+    compute_overall_confidence_with_gap,
+)
 from .extractor import (
     ConfidenceExtractor,
     confidence_extract,
@@ -31,6 +35,10 @@ __all__ = [
     # Convenience functions
     "confidence_extract",
     "confidence_extract_batch",
+
+    # Aggregation primitives (Verified Autonomy Layer 1)
+    "compute_overall_confidence",
+    "compute_overall_confidence_with_gap",
 
     # Result models
     "ConfidenceResult",

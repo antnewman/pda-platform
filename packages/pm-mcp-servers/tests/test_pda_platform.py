@@ -4742,3 +4742,80 @@ class TestHallucinationsField:
         if payload["_groundedness"]["verdict"] in ("GROUNDED", "UNGROUNDED"):
             assert quality["verdict"] == "COMPUTED"
             assert "potential_hallucinations" in quality
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 1 integration: confidence-gap surfacing (issue #64 / B29)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestConfidenceGapSurfacing:
+    """B29 exposes the gap between conservative inverse-weighted
+    confidence and the naive arithmetic mean. The gap is non-negative
+    by construction; a large gap signals that low-confidence fields
+    are being hidden by the naive mean."""
+
+    def test_with_gap_function_returns_all_fields(self):
+        from agent_planning.confidence import (
+            compute_overall_confidence_with_gap,
+        )
+
+        result = compute_overall_confidence_with_gap(
+            {"a": 0.9, "b": 0.9, "c": 0.9}
+        )
+        assert set(result.keys()) == {
+            "weighted",
+            "plain_mean",
+            "gap",
+            "field_count",
+        }
+        assert result["field_count"] == 3
+
+    def test_equal_confidences_produce_zero_gap(self):
+        from agent_planning.confidence import (
+            compute_overall_confidence_with_gap,
+        )
+
+        result = compute_overall_confidence_with_gap(
+            {"a": 0.7, "b": 0.7, "c": 0.7}
+        )
+        assert abs(result["weighted"] - result["plain_mean"]) < 1e-9
+        assert abs(result["gap"]) < 1e-9
+
+    def test_mixed_confidences_produce_positive_gap(self):
+        """When low and high confidences coexist, the inverse-weighted
+        average pulls towards the low values — so plain_mean >
+        weighted and gap > 0."""
+        from agent_planning.confidence import (
+            compute_overall_confidence_with_gap,
+        )
+
+        result = compute_overall_confidence_with_gap(
+            {"high": 0.95, "low": 0.20}
+        )
+        assert result["plain_mean"] > result["weighted"]
+        assert result["gap"] > 0.0
+        # Plain mean is exactly the arithmetic mean.
+        assert abs(result["plain_mean"] - 0.575) < 1e-9
+
+    def test_empty_input_returns_zeros(self):
+        from agent_planning.confidence import (
+            compute_overall_confidence_with_gap,
+        )
+
+        result = compute_overall_confidence_with_gap({})
+        assert result == {
+            "weighted": 0.0,
+            "plain_mean": 0.0,
+            "gap": 0.0,
+            "field_count": 0,
+        }
+
+    def test_legacy_function_still_returns_a_float(self):
+        """Backward compatibility: existing callers of
+        `compute_overall_confidence` still receive a plain float."""
+        from agent_planning.confidence import compute_overall_confidence
+
+        value = compute_overall_confidence({"a": 0.8, "b": 0.6})
+        assert isinstance(value, float)
+        assert 0.0 <= value <= 1.0
