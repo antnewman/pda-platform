@@ -18,7 +18,44 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._audit import record_decision
+
 server = Server("pm-simulation")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain for pm-simulation
+# ─────────────────────────────────────────────────────────────────────────
+# Monte Carlo simulation results are decision-producing: a P50/P80
+# pair shapes board confidence in delivery timelines. The audit chain
+# records every simulation invocation so a reviewer can answer "what
+# P50 and P80 was generated, with what input distribution, and with
+# what statistical confidence?" without trusting the consumer to
+# faithfully reproduce the numbers.
+
+_AUDIT_MODULE = "pm_simulation"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
 
 SIMULATION_TOOLS: list[Tool] = [
     Tool(
@@ -406,6 +443,38 @@ async def _run_schedule_simulation(arguments: dict[str, Any]) -> list[TextConten
         "run_at": run_at,
     }
 
+    # Audit-chain entry — the decision is a coarse confidence band
+    # derived from the baseline-vs-P50 relationship. Output captures
+    # P50/P80/P90 days and run identifier; input captures the
+    # simulation parameters that drove the run.
+    if baseline_probability >= 70:
+        sim_verdict = "HIGH_CONFIDENCE"
+    elif baseline_probability >= 40:
+        sim_verdict = "MEDIUM_CONFIDENCE"
+    else:
+        sim_verdict = "LOW_CONFIDENCE"
+    _safe_record_decision(
+        input_data={
+            "project_id": project_id,
+            "n_simulations": n_simulations,
+            "baseline_duration_days": baseline_duration_days,
+            "base_uncertainty_pct": base_uncertainty_pct,
+            "use_risk_register": use_risk_register,
+        },
+        output_data={
+            "run_id": run_id,
+            "p50_days": p50_days,
+            "p80_days": p80_days,
+            "p90_days": p90_days,
+            "baseline_probability_pct": baseline_probability,
+        },
+        decision=sim_verdict,
+        action="run_schedule_simulation",
+        metadata={
+            "risk_multiplier": round(risk_multiplier, 4),
+            "risk_adjustment_applied": risk_adjustment_applied,
+        },
+    )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 

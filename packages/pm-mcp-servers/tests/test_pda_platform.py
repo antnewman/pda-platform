@@ -4084,3 +4084,78 @@ class TestPmKnowledgeAuditChain:
         first = chain.entries[0]
         assert first.action == "generate_premortem_questions"
         assert first.decision in {"QUESTIONS_EMITTED", "NO_QUESTIONS"}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 8 integration: pm-simulation audit chain (issue #58 / B23)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPmSimulationAuditChain:
+    """L8 records Monte Carlo schedule simulation runs into the
+    `pm_simulation` audit chain. The chain answers: "for this
+    simulation run, what P50/P80/P90 were produced and what was the
+    risk-multiplier-adjusted confidence band?"."""
+
+    def _setup_isolated_audit(self, monkeypatch, tmp_path):
+        from pm_mcp_servers import _audit as audit_mod
+
+        audit_mod._refresh_audit_dir_for_testing(tmp_path / "audit")
+        monkeypatch.delenv("PDA_AUDIT_SIGNING_KEY", raising=False)
+        return audit_mod
+
+    async def test_schedule_simulation_records_run_and_p_values(
+        self, monkeypatch, tmp_path
+    ):
+        """A run_schedule_simulation call appends an entry capturing
+        the run_id and the P-values. The decision string is one of
+        HIGH/MEDIUM/LOW_CONFIDENCE."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+
+        # Driving the simulation via baseline_duration_days avoids
+        # needing project tasks in the store.
+        await call_tool(
+            "run_schedule_simulation",
+            {
+                "project_id": "AUDIT-SIM-001",
+                "baseline_duration_days": 120,
+                "n_simulations": 200,
+                "use_risk_register": False,
+            },
+        )
+        chain, _, _ = audit_mod._get_chain("pm_simulation")
+        assert len(chain) == 1
+        entry = chain.entries[0]
+        assert entry.action == "run_schedule_simulation"
+        assert entry.decision in {
+            "HIGH_CONFIDENCE",
+            "MEDIUM_CONFIDENCE",
+            "LOW_CONFIDENCE",
+        }
+        # Metadata captures risk-adjustment status.
+        assert "risk_adjustment_applied" in entry.metadata
+        # Chain integrity verifies.
+        assert audit_mod.verify_chain("pm_simulation").is_valid
+
+    async def test_two_simulation_runs_form_a_linked_chain(
+        self, monkeypatch, tmp_path
+    ):
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        for label in ("RUN_A", "RUN_B"):
+            await call_tool(
+                "run_schedule_simulation",
+                {
+                    "project_id": f"AUDIT-SIM-{label}",
+                    "baseline_duration_days": 150,
+                    "n_simulations": 200,
+                    "use_risk_register": False,
+                },
+            )
+        chain, _, _ = audit_mod._get_chain("pm_simulation")
+        assert len(chain) == 2
+        assert chain.entries[1].previous_entry_hash == chain.entries[0].entry_hash
+        assert audit_mod.verify_chain("pm_simulation").is_valid
