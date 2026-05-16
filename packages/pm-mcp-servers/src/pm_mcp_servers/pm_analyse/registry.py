@@ -13,6 +13,7 @@ from .tools import (
     compare_baseline,
     detect_narrative_divergence,
     detect_outliers,
+    evaluate_calibration,
     forecast_completion,
     identify_risks,
     suggest_mitigations,
@@ -241,6 +242,55 @@ TOOLS: list[Tool] = [
             "required": ["project_id", "narrative_text"],
         },
     ),
+    Tool(
+        name="evaluate_calibration",
+        description=(
+            "Compute Expected Calibration Error (ECE) and reliability-diagram bin "
+            "data from a paired list of predicted probabilities and observed "
+            "outcomes. Verified Autonomy §7.3 reference implementation. A "
+            "calibrated forecaster has confidence equal to accuracy on every "
+            "subset of its predictions; this tool returns the empirical gap. "
+            "Useful for evaluating: AI confidence scores against subsequent "
+            "decisions, P50/P80 schedule forecasts against actual delivery, "
+            "RAG ratings against actual project outcomes. Returns the scalar "
+            "ECE plus the per-bin counts/mean confidence/mean accuracy/gap "
+            "so a consumer can render the reliability diagram."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "predictions": {
+                    "type": "array",
+                    "items": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "description": (
+                        "Predicted probability or confidence in [0, 1]. For "
+                        "binary forecasts: the probability of the positive class. "
+                        "For multi-class: pass the top-class probability."
+                    ),
+                },
+                "actuals": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 0, "maximum": 1},
+                    "description": (
+                        "Observed outcomes encoded as 0 (negative / forecast "
+                        "missed) or 1 (positive / forecast met). Same length "
+                        "as predictions."
+                    ),
+                },
+                "n_bins": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 15,
+                    "description": "Number of equal-width bins on [0, 1] for the reliability diagram. Default 15 (paper §7.3).",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project identifier — included in the response for downstream audit traceability.",
+                },
+            },
+            "required": ["predictions", "actuals"],
+        },
+    ),
 ]
 
 _TOOL_NAMES = {t.name for t in TOOLS}
@@ -263,6 +313,8 @@ async def dispatch(name: str, arguments: Any) -> list[TextContent]:
             result = await compare_baseline(arguments)
         elif name == "detect_narrative_divergence":
             result = await detect_narrative_divergence(arguments)
+        elif name == "evaluate_calibration":
+            result = await evaluate_calibration(arguments)
         else:
             result = {"error": {"code": "UNKNOWN_TOOL", "message": f"Unknown tool: {name}"}}
 

@@ -50,7 +50,7 @@ class TestRegistryModules:
     def test_analyse_registry_loads(self):
         from pm_mcp_servers.pm_analyse.registry import TOOLS, dispatch
 
-        assert len(TOOLS) == 7
+        assert len(TOOLS) == 8
         assert callable(dispatch)
 
     def test_validate_registry_loads(self):
@@ -175,10 +175,10 @@ class TestToolAggregation:
     """Test that tool aggregation in the unified server is correct."""
 
     def test_total_tool_count(self):
-        """Unified server has exactly 124 tools (6+7+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+8)."""
+        """Unified server has exactly 125 tools (6+8+4+5+28+12+5+2+2+9+5+5+5+8+2+5+6+8)."""
         from pm_mcp_servers.pda_platform.server import ALL_TOOLS
 
-        assert len(ALL_TOOLS) == 124
+        assert len(ALL_TOOLS) == 125
 
     def test_no_duplicate_tool_names(self):
         """No two tools share the same name across modules."""
@@ -230,7 +230,7 @@ class TestExpectedTools:
     EXPECTED_ANALYSE_TOOLS = {
         "identify_risks", "forecast_completion", "detect_outliers",
         "assess_health", "suggest_mitigations", "compare_baseline",
-        "detect_narrative_divergence",
+        "detect_narrative_divergence", "evaluate_calibration",
     }
 
     EXPECTED_VALIDATE_TOOLS = {
@@ -4159,3 +4159,133 @@ class TestPmSimulationAuditChain:
         assert len(chain) == 2
         assert chain.entries[1].previous_entry_hash == chain.entries[0].entry_hash
         assert audit_mod.verify_chain("pm_simulation").is_valid
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 4 integration: evaluate_calibration tool (issue #59 / B24)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestEvaluateCalibrationTool:
+    """The new pm-analyse `evaluate_calibration` tool exposes A4's
+    compute_ece + reliability-diagram primitive as an MCP tool.
+    Anchors the integration: tool is registered, dispatch works,
+    well-calibrated input produces low ECE, miscalibrated produces
+    high ECE, errors surface as structured response."""
+
+    async def test_tool_is_registered_and_routed(self):
+        """evaluate_calibration must be discoverable on the unified
+        server and dispatchable via call_tool."""
+        from pm_mcp_servers.pda_platform.server import ALL_TOOLS
+
+        names = {t.name for t in ALL_TOOLS}
+        assert "evaluate_calibration" in names
+
+    async def test_well_calibrated_inputs_produce_low_ece(self):
+        """A predictor whose confidence matches accuracy on every
+        subset produces near-zero ECE."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        # Build a perfectly-calibrated synthetic set: half the
+        # samples at confidence 0.5 with 50% accuracy, half at 0.9
+        # with 90% accuracy. Using exact alternation makes the test
+        # deterministic.
+        predictions: list[float] = []
+        actuals: list[int] = []
+        for i in range(100):
+            predictions.append(0.5)
+            actuals.append(1 if i % 2 == 0 else 0)
+        for i in range(100):
+            predictions.append(0.9)
+            actuals.append(0 if i % 10 == 0 else 1)
+
+        result = await call_tool(
+            "evaluate_calibration",
+            {"predictions": predictions, "actuals": actuals, "n_bins": 10},
+        )
+        payload = _json.loads(result[0].text)
+        assert "ece" in payload
+        assert payload["ece"] < 0.05
+        assert payload["n_samples"] == 200
+        assert len(payload["bins"]) == 10
+        # Every well-formed bin has the expected keys.
+        for b in payload["bins"]:
+            assert {"lower", "upper", "count", "mean_confidence", "mean_accuracy", "gap"}.issubset(b.keys())
+
+    async def test_overconfident_predictor_produces_high_ece(self):
+        """A predictor that always claims 0.9 confidence but is only
+        right 60% of the time has ECE close to 0.3."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        predictions = [0.9] * 200
+        # 60% accuracy.
+        actuals = [1 if i % 5 < 3 else 0 for i in range(200)]
+
+        result = await call_tool(
+            "evaluate_calibration",
+            {"predictions": predictions, "actuals": actuals},
+        )
+        payload = _json.loads(result[0].text)
+        # 0.9 - 0.6 = 0.3 gap; ECE close to 0.3.
+        assert payload["ece"] > 0.2
+        # Poor-calibration interpretation surfaced.
+        assert "poorly calibrated" in payload["interpretation"].lower()
+
+    async def test_mismatched_lengths_returns_structured_error(self):
+        """predictions/actuals length mismatch should not crash — it
+        should return a structured error dict so the consumer can
+        recover."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "evaluate_calibration",
+            {"predictions": [0.5, 0.7, 0.9], "actuals": [1, 0]},
+        )
+        payload = _json.loads(result[0].text)
+        assert "error" in payload
+        assert payload["error"]["code"] == "INVALID_INPUT"
+
+    async def test_project_id_echoed_in_response(self):
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "evaluate_calibration",
+            {
+                "predictions": [0.5, 0.7],
+                "actuals": [1, 0],
+                "project_id": "CALIB-TEST-001",
+            },
+        )
+        payload = _json.loads(result[0].text)
+        assert payload["project_id"] == "CALIB-TEST-001"
+
+    async def test_empty_bins_serialise_as_null_means(self):
+        """A bin that no sample falls in must serialise with null
+        mean_confidence/mean_accuracy/gap (not NaN, which JSON cannot
+        represent and consumers can't render)."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        # All predictions at 0.95 — only the top bin is populated.
+        predictions = [0.95] * 10
+        actuals = [1] * 10
+        result = await call_tool(
+            "evaluate_calibration",
+            {"predictions": predictions, "actuals": actuals, "n_bins": 10},
+        )
+        payload = _json.loads(result[0].text)
+        empty_bins = [b for b in payload["bins"] if b["count"] == 0]
+        assert empty_bins, "expected at least one empty bin"
+        for b in empty_bins:
+            assert b["mean_confidence"] is None
+            assert b["mean_accuracy"] is None
+            assert b["gap"] is None
