@@ -2398,3 +2398,105 @@ class TestPremortemQuestionsGuardrail:
         assert "pre-mortem questions" in payload["message"]
         triggered_names = [t["rule_name"] for t in payload["triggered"]]
         assert any("forbidden_phrase" in name for name in triggered_names)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_benefits_narrative (issue #41 / B6)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestBenefitsNarrativeGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    pm_brm.generate_benefits_narrative.
+
+    Benefits narratives are gate-review evidence — quoted in Treasury
+    and IPA submissions. The tool requires ANTHROPIC_API_KEY for the
+    full path, so we test the pure-Python integration entry point
+    (`_apply_benefits_narrative_guardrail`) directly.
+    """
+
+    def test_clean_narrative_output_passes_through_unchanged(self):
+        import json as _json
+
+        from pm_mcp_servers.pm_brm.server import (
+            _apply_benefits_narrative_guardrail,
+        )
+
+        clean = {
+            "project_id": "BRM-TEST-001",
+            "gate_number": 3,
+            "narrative_text": (
+                "The programme is on track to realise the planned £45M "
+                "in efficiency benefits by FY27, with the largest tranche "
+                "(£18M from automation) already showing measurable "
+                "drawdown in Q2 actuals."
+            ),
+            "confidence": 0.72,
+            "review_level": "SPOT_CHECK",
+            "samples_used": 5,
+            "review_reason": None,
+            "generated_at": "2026-05-16T07:00:00",
+            "context_summary": {"total_benefits": 12, "health_score": 78},
+            "message": "Benefits narrative generated with 72% confidence.",
+        }
+        result = _apply_benefits_narrative_guardrail(clean)
+        payload = _json.loads(result[0].text)
+        assert payload == clean
+        assert "_guardrail_flags" not in payload
+
+    def test_overclaim_phrase_in_narrative_text_triggers_rejection(self):
+        import json as _json
+
+        from pm_mcp_servers.pm_brm.server import (
+            _apply_benefits_narrative_guardrail,
+        )
+
+        dirty = {
+            "project_id": "BRM-TEST-002",
+            "gate_number": 3,
+            # Forbidden phrase embedded in the Claude-authored narrative.
+            "narrative_text": (
+                "We are 100% certain the programme will realise the "
+                "planned benefits at the originally-modelled run-rate."
+            ),
+            "confidence": 0.5,
+            "review_level": "DETAILED_REVIEW",
+            "samples_used": 5,
+            "review_reason": None,
+            "generated_at": "2026-05-16T07:00:00",
+            "context_summary": {"total_benefits": 12, "health_score": 60},
+            "message": "Benefits narrative generated with 50% confidence.",
+        }
+        result = _apply_benefits_narrative_guardrail(dirty)
+        text = result[0].text
+        # The narrative_text containing the overclaim must not appear.
+        assert "realise the planned benefits at the originally" not in text
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        assert "benefits narrative" in payload["message"]
+
+    def test_template_leak_in_narrative_triggers_rejection(self):
+        import json as _json
+
+        from pm_mcp_servers.pm_brm.server import (
+            _apply_benefits_narrative_guardrail,
+        )
+
+        leaked = {
+            "project_id": "BRM-TEST-003",
+            "gate_number": 3,
+            "narrative_text": (
+                "The programme will deliver INSERT BENEFIT HERE by FY27."
+            ),
+            "confidence": 0.4,
+            "review_level": "EXPERT_REQUIRED",
+            "samples_used": 5,
+            "review_reason": "Low confidence",
+            "generated_at": "2026-05-16T07:00:00",
+            "context_summary": {},
+            "message": "",
+        }
+        result = _apply_benefits_narrative_guardrail(leaked)
+        payload = _json.loads(result[0].text)
+        assert payload["error"] == "guardrail_rejected"
