@@ -31,12 +31,64 @@ from typing import Any
 
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
     build_forbidden_phrase_rule,
     evaluate,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness checking for the benefits narrative
+# ─────────────────────────────────────────────────────────────────────────
+# The benefits narrative is the Treasury/IPA Green Book justification.
+# The L6 check measures how well the Claude-authored ``narrative_text``
+# is grounded in the underlying benefits context (the dict the
+# NarrativeGenerator was handed: total benefits, health score,
+# realisation percentage, at-risk count, gate probes). A high score
+# means the narrative cites the same words the data uses; a low score
+# means the LLM has drifted away from the evidence.
+
+
+def _attach_groundedness_to_benefits_output(
+    output: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Add a ``_groundedness`` field to the benefits-narrative output.
+
+    "answer" is the Claude-authored ``narrative_text``.
+    "sources" are the entries of the narrative-generation ``context``
+    (benefits register summary, health score, realisation
+    percentage, at-risk count, gate probe text).
+    """
+    narrative_text = str(output.get("narrative_text", "") or "")
+
+    sources: list[dict[str, Any]] = []
+    for key, value in (context or {}).items():
+        if not value:
+            continue
+        sources.append(
+            {
+                "id": str(key),
+                "content": json.dumps(value, default=str),
+            }
+        )
+
+    new_output = dict(output)
+    if not narrative_text.strip() or not sources:
+        new_output["_groundedness"] = {
+            "verdict": "NOT_COMPUTED",
+            "reason": "No narrative text or no source context.",
+        }
+        return new_output
+
+    gnd = compute_groundedness(
+        narrative_text, sources, query="generate_benefits_narrative"
+    )
+    new_output["_groundedness"] = gnd.to_dict()
+    return new_output
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1161,6 +1213,9 @@ async def _generate_benefits_narrative(
             ),
         }
 
+        # L6 then L5 — annotate then gate. L5 rejection still
+        # suppresses the annotated output via structured error JSON.
+        output = _attach_groundedness_to_benefits_output(output, context)
         return _apply_benefits_narrative_guardrail(output)
 
     except Exception as exc:
