@@ -20,6 +20,7 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+from pm_mcp_servers._quality import derive_quality_from_groundedness
 from pm_mcp_servers.shared import project_store
 
 from .analyzers import BaselineComparator, HealthAnalyzer, OutlierDetector
@@ -92,6 +93,9 @@ def _attach_groundedness_to_divergence_result(
         answer, sources, query="detect_narrative_divergence"
     )
     new_result["_groundedness"] = gnd.to_dict()
+    new_result["_quality"] = derive_quality_from_groundedness(
+        new_result["_groundedness"]
+    )
     return new_result
 
 

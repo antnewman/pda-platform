@@ -38,6 +38,7 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+from pm_mcp_servers._quality import derive_quality_from_groundedness
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -88,6 +89,9 @@ def _attach_groundedness_to_benefits_output(
         narrative_text, sources, query="generate_benefits_narrative"
     )
     new_output["_groundedness"] = gnd.to_dict()
+    new_output["_quality"] = derive_quality_from_groundedness(
+        new_output["_groundedness"]
+    )
     return new_output
 
 

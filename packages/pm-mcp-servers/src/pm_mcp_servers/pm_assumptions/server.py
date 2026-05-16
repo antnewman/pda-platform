@@ -31,6 +31,7 @@ from mcp.types import TextContent, Tool
 from pm_data_tools.db.store import AssuranceStore
 from pm_mcp_servers._audit import record_decision
 from pm_mcp_servers._groundedness import compute_groundedness
+from pm_mcp_servers._quality import derive_quality_from_groundedness
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -145,6 +146,9 @@ def _attach_groundedness_to_assumption_report(
         answer, sources, query="generate_assumption_report"
     )
     new_report["_groundedness"] = result.to_dict()
+    new_report["_quality"] = derive_quality_from_groundedness(
+        new_report["_groundedness"]
+    )
     return new_report
 
 

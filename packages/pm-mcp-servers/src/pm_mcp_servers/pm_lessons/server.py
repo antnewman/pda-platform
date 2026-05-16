@@ -29,6 +29,7 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+from pm_mcp_servers._quality import derive_quality_from_groundedness
 
 server = Server("pm-lessons")
 
@@ -113,6 +114,11 @@ def _attach_groundedness_to_lessons_section(
         document, sources, query="generate_lessons_section"
     )
     rd = result.to_dict()
+    quality = derive_quality_from_groundedness(rd)
+    # Both groundedness and quality live in the same HTML-comment
+    # payload for parser convenience.
+    combined = dict(rd)
+    combined["_quality"] = quality
     terms = rd.get("ungrounded_terms", []) or []
     terms_preview = ", ".join(terms[:8])
     if len(terms) > 8:
@@ -123,7 +129,7 @@ def _attach_groundedness_to_lessons_section(
         f"*Groundedness: {rd['overall_score']:.2f} ({rd['verdict']}). "
         f"Ungrounded terms: {terms_preview}*"
     )
-    machine_block = "<!-- _groundedness: " + json.dumps(rd, default=str) + " -->"
+    machine_block = "<!-- _groundedness: " + json.dumps(combined, default=str) + " -->"
     return f"{document}\n\n---\n{human_line}\n\n{machine_block}\n"
 
 
