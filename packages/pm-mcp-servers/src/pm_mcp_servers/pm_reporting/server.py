@@ -29,35 +29,58 @@ server = Server("pm-reporting")
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Layer 5 — Output-guardrail policy for board exception reports
+# Layer 5 — Output-guardrail policies for AI-authored governance documents
 # ─────────────────────────────────────────────────────────────────────────
-# This is the policy applied to the AI-authored board report before it is
-# returned to the caller. The forbidden-phrase rule rejects outputs that
-# overclaim certainty in a board context (a board exception report must
-# be measured and evidence-driven — phrases like "100% certain" or
-# "guaranteed" overstate confidence and have no place in an exception
-# report intended for ministers or Parliament). Template-leak phrases
-# catch the failure mode where the LLM emits scaffolding rather than
-# substantive content.
-#
-# Each phrase is matched case-insensitively. Adding a phrase here without
-# changing the test suite is intentional — the regression test asserts
-# the *behaviour* (rejection occurs, original prose is suppressed) rather
-# than the specific phrase list.
+# Each AI-authored tool in pm-reporting has its own policy because the
+# definition of "forbidden" depends on the document's audience and
+# tolerated style. Common across all of them: reject outputs that
+# overclaim certainty ("100% certain", "guaranteed", "zero risk") or
+# leak scaffolding ("INSERT NARRATIVE HERE", "TODO", "TBD",
+# "[placeholder]"). Phrase matches are case-insensitive substrings.
+# The regression tests assert the *behaviour* (rejection occurs, prose
+# is suppressed) rather than the specific phrase list, so phrases can
+# be added without test churn.
+
+# Phrases shared by all governance-document policies.
+_COMMON_OVERCLAIM_PHRASES = (
+    "100% certain",
+    "100 % certain",
+    "absolutely guaranteed",
+    "no risk whatsoever",
+    "zero risk",
+)
+
+_COMMON_TEMPLATE_LEAK_PHRASES = (
+    "INSERT NARRATIVE HERE",
+    "INSERT FIGURE HERE",
+    "TODO",
+    "TBD",
+    "[placeholder]",
+)
+
+# Board exception report — minister/parliament-facing. Strictest set.
 _BOARD_REPORT_POLICY = [
     build_forbidden_phrase_rule(
         "document",
+        phrases=[*_COMMON_OVERCLAIM_PHRASES, *_COMMON_TEMPLATE_LEAK_PHRASES],
+        severity=Severity.BLOCK,
+    ),
+]
+
+# Gate Review Summary — IPA-format, submitted to gate-review boards.
+# Adds gate-specific failure modes (rating fabrication, evidence
+# overclaim) to the shared base.
+_GATE_REVIEW_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
         phrases=[
-            "100% certain",
-            "100 % certain",
-            "absolutely guaranteed",
-            "no risk whatsoever",
-            "zero risk",
-            "INSERT NARRATIVE HERE",
-            "INSERT FIGURE HERE",
-            "TODO",
-            "TBD",
-            "[placeholder]",
+            *_COMMON_OVERCLAIM_PHRASES,
+            *_COMMON_TEMPLATE_LEAK_PHRASES,
+            # Gate-review-specific: a reviewer should never assert that
+            # an assurance condition is "always" met — that is the kind
+            # of phrasing the IPA challenges. Catch it deterministically.
+            "always met",
+            "definitely deliver",
         ],
         severity=Severity.BLOCK,
     ),
@@ -597,7 +620,9 @@ If data is missing for a dimension, note the gap rather than assuming performanc
     except Exception as exc:
         return [TextContent(type="text", text=json.dumps({"error": f"Claude API call failed: {exc}"}))]
 
-    return [TextContent(type="text", text=document)]
+    return _apply_document_guardrail(
+        document, _GATE_REVIEW_POLICY, "gate review summary"
+    )
 
 
 async def _generate_sro_dashboard(arguments: dict[str, Any]) -> list[TextContent]:
@@ -819,20 +844,28 @@ Rules:
     return _apply_board_report_guardrail(document)
 
 
-def _apply_board_report_guardrail(document: str) -> list[TextContent]:
-    """Apply the L5 deterministic guardrail to a generated board report.
+def _apply_document_guardrail(
+    document: str,
+    policy: list,
+    document_kind: str,
+) -> list[TextContent]:
+    """Apply an L5 deterministic guardrail policy to an AI-authored document.
 
     APPROVED: pass through unchanged as markdown.
     FLAGGED: prepend a guardrail-notice block but keep the document.
     REJECTED: replace the document with structured error JSON so a
-        board-facing consumer cannot accidentally render an output that
+        downstream consumer cannot accidentally render an output that
         contains forbidden phrases (hard fail-safe).
 
-    Shared between the Claude-authored and evidence-only fallback paths
-    so the same policy applies regardless of how the document was
-    produced. See ``_BOARD_REPORT_POLICY`` for the rule set.
+    Args:
+        document: The generated markdown text.
+        policy: List of :class:`Rule` to evaluate against
+            ``{"document": document}``.
+        document_kind: Short human-readable name used in the rejection
+            error message (e.g. ``"board exception report"``,
+            ``"gate review summary"``).
     """
-    result = evaluate({"document": document}, _BOARD_REPORT_POLICY)
+    result = evaluate({"document": document}, policy)
     if result.verdict == Verdict.REJECTED:
         return [
             TextContent(
@@ -842,11 +875,10 @@ def _apply_board_report_guardrail(document: str) -> list[TextContent]:
                         "error": "guardrail_rejected",
                         "verdict": result.verdict.value,
                         "message": (
-                            "Generated board exception report contained one "
-                            "or more phrases forbidden by the L5 deterministic "
-                            "policy. Inspect `triggered` for the failing "
-                            "rules; the original prose has been suppressed "
-                            "to prevent board-facing rendering."
+                            f"Generated {document_kind} contained one or more "
+                            "phrases forbidden by the L5 deterministic policy. "
+                            "Inspect `triggered` for the failing rules; the "
+                            "original prose has been suppressed."
                         ),
                         "triggered": [e.to_dict() for e in result.triggered],
                         "evaluations": [e.to_dict() for e in result.evaluations],
@@ -856,7 +888,7 @@ def _apply_board_report_guardrail(document: str) -> list[TextContent]:
         ]
     if result.verdict == Verdict.FLAGGED:
         notice_lines = [
-            "> ⚠️ **L5 guardrail flagged this report.** Reviewer attention required.",
+            f"> ⚠️ **L5 guardrail flagged this {document_kind}.** Reviewer attention required.",
             ">",
         ]
         for triggered in result.triggered:
@@ -865,6 +897,15 @@ def _apply_board_report_guardrail(document: str) -> list[TextContent]:
             )
         document = "\n".join(notice_lines) + "\n\n" + document
     return [TextContent(type="text", text=document)]
+
+
+# Backward-compatible alias for the board exception report path.
+def _apply_board_report_guardrail(document: str) -> list[TextContent]:
+    """Apply the board-report guardrail policy. Thin wrapper around the
+    generalised :func:`_apply_document_guardrail`."""
+    return _apply_document_guardrail(
+        document, _BOARD_REPORT_POLICY, "board exception report"
+    )
 
 
 async def _generate_portfolio_summary(arguments: dict[str, Any]) -> list[TextContent]:
