@@ -2609,3 +2609,116 @@ class TestPortfolioSummaryGuardrail:
         assert payload["error"] == "guardrail_rejected"
         assert payload["verdict"] == "REJECTED"
         assert "portfolio summary" in payload["message"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_lessons_section (issue #43 / B8)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestLessonsSectionGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    generate_lessons_section.
+
+    The handler has three return paths — no-lessons template,
+    no-API-key deterministic fallback, and Claude-authored narrative.
+    All three are gated by the guardrail. The deterministic-fallback
+    path is the easiest to exercise live (no Claude monkeypatch
+    required) and is what the test focuses on.
+    """
+
+    def _seed_lessons(self, project_id: str, lessons: list[dict]):
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        for lesson in lessons:
+            row = {
+                "id": lesson["id"],
+                "project_id": project_id,
+                "document_type": lesson.get("document_type", "GATE_REVIEW"),
+                "category": lesson.get("category", "GENERAL"),
+                "title": lesson.get("title", "Untitled"),
+                "root_cause": lesson.get("root_cause", "Not recorded"),
+                "recommendation": lesson.get("recommendation", "Not recorded"),
+                "severity": lesson.get("severity", "MEDIUM"),
+                "extracted_at": "2026-05-16T07:00:00",
+            }
+            store.upsert_project_lesson(row)
+
+    async def test_no_lessons_template_passes_through(self, monkeypatch):
+        """When no lessons exist, the deterministic template is
+        returned — clean markdown, no guardrail rejection."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        # Use a project_id with no stored lessons.
+        result = await call_tool(
+            "generate_lessons_section",
+            {"project_id": "LESSONS-EMPTY-PROJ-001"},
+        )
+        text = result[0].text
+        assert text.startswith("# Lessons Learned")
+        assert "No lessons have been recorded" in text
+        assert "guardrail_rejected" not in text
+
+    async def test_fallback_path_clean_lessons_pass_through(self, monkeypatch):
+        """With API key unset and clean lesson data, the deterministic
+        fallback returns formatted markdown unchanged."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        self._seed_lessons(
+            "LESSONS-CLEAN-001",
+            [
+                {
+                    "id": "L-CLEAN-1",
+                    "title": "Engage suppliers early",
+                    "category": "PROCUREMENT",
+                    "severity": "HIGH",
+                    "root_cause": "Late supplier engagement delayed bid evaluation.",
+                    "recommendation": "Initiate market engagement six months before tender.",
+                }
+            ],
+        )
+        result = await call_tool(
+            "generate_lessons_section", {"project_id": "LESSONS-CLEAN-001"}
+        )
+        text = result[0].text
+        assert "Engage suppliers early" in text
+        assert "guardrail_rejected" not in text
+
+    async def test_fallback_path_with_overclaim_phrase_in_lesson_rejects(
+        self, monkeypatch
+    ):
+        """A lesson whose recommendation contains a forbidden phrase
+        propagates that phrase into the deterministic-fallback markdown.
+        The guardrail rejects the response and suppresses the prose."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        self._seed_lessons(
+            "LESSONS-REJECT-001",
+            [
+                {
+                    "id": "L-REJECT-1",
+                    "title": "Tainted lesson",
+                    "category": "DELIVERY",
+                    "severity": "HIGH",
+                    "root_cause": "Test injection",
+                    "recommendation": (
+                        "We are 100% certain this lesson applies "
+                        "universally."
+                    ),
+                }
+            ],
+        )
+        result = await call_tool(
+            "generate_lessons_section", {"project_id": "LESSONS-REJECT-001"}
+        )
+        text = result[0].text
+        # Original recommendation prose suppressed.
+        assert "lesson applies" not in text
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert "lessons section" in payload["message"]

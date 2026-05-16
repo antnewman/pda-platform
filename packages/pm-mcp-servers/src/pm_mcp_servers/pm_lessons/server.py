@@ -22,8 +22,85 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
+from pm_mcp_servers._guardrails import (
+    Severity,
+    Verdict,
+    build_forbidden_phrase_rule,
+    evaluate,
+)
 
 server = Server("pm-lessons")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 5 — Output-guardrail policy for AI-written lessons sections
+# ─────────────────────────────────────────────────────────────────────────
+# A lessons learned section in a PIR or gate review carries forward
+# guidance to future projects, so a forbidden phrase (overclaim,
+# template leak) survives well beyond the current report. The policy
+# blocks both failure modes.
+_LESSONS_SECTION_POLICY = [
+    build_forbidden_phrase_rule(
+        "document",
+        phrases=[
+            "100% certain",
+            "100 % certain",
+            "absolutely guaranteed",
+            "no risk whatsoever",
+            "zero risk",
+            "INSERT NARRATIVE HERE",
+            "INSERT FIGURE HERE",
+            "INSERT LESSON HERE",
+            "[placeholder]",
+        ],
+        severity=Severity.BLOCK,
+    ),
+]
+
+
+def _apply_lessons_section_guardrail(document: str) -> list[TextContent]:
+    """Apply the L5 deterministic guardrail to a lessons-section markdown
+    document.
+
+    APPROVED: pass through unchanged as markdown.
+    FLAGGED: prepend a guardrail-notice blockquote, keep the document.
+    REJECTED: replace the document with structured error JSON so a
+        downstream PIR/gate-review consumer cannot render forbidden
+        prose.
+    """
+    result = evaluate({"document": document}, _LESSONS_SECTION_POLICY)
+    if result.verdict == Verdict.REJECTED:
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "guardrail_rejected",
+                        "verdict": result.verdict.value,
+                        "message": (
+                            "Generated lessons section contained one or "
+                            "more phrases forbidden by the L5 deterministic "
+                            "policy. Inspect `triggered` for the failing "
+                            "rules; the original markdown has been "
+                            "suppressed."
+                        ),
+                        "triggered": [e.to_dict() for e in result.triggered],
+                        "evaluations": [e.to_dict() for e in result.evaluations],
+                    }
+                ),
+            )
+        ]
+    if result.verdict == Verdict.FLAGGED:
+        notice_lines = [
+            "> ⚠️ **L5 guardrail flagged this lessons section.** Reviewer attention required.",
+            ">",
+        ]
+        for triggered in result.triggered:
+            notice_lines.append(
+                f"> - {triggered.rule_name}: {triggered.message}"
+            )
+        document = "\n".join(notice_lines) + "\n\n" + document
+    return [TextContent(type="text", text=document)]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -563,7 +640,7 @@ async def _generate_lessons_section(arguments: dict[str, Any]) -> list[TextConte
             "Once lessons are stored, re-run `generate_lessons_section` to produce "
             "a formatted section ready for inclusion in your report.\n"
         )
-        return [TextContent(type="text", text=template)]
+        return _apply_lessons_section_guardrail(template)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
@@ -577,7 +654,7 @@ async def _generate_lessons_section(arguments: dict[str, Any]) -> list[TextConte
                 f"**Root cause:** {lesson.get('root_cause', 'Not recorded')}\n\n"
                 f"**Recommendation:** {lesson.get('recommendation')}\n"
             )
-        return [TextContent(type="text", text="\n".join(fallback_lines))]
+        return _apply_lessons_section_guardrail("\n".join(fallback_lines))
 
     # Trim to max_lessons — prioritise by severity.
     severity_key = lambda l: _SEVERITY_ORDER.get(l.get("severity", "LOW"), 0)
@@ -609,7 +686,7 @@ async def _generate_lessons_section(arguments: dict[str, Any]) -> list[TextConte
             )
         ]
 
-    return [TextContent(type="text", text=narrative)]
+    return _apply_lessons_section_guardrail(narrative)
 
 
 # ---------------------------------------------------------------------------
