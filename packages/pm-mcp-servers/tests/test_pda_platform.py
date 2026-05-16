@@ -4618,3 +4618,127 @@ class TestRouteOutputsToReviewTool:
         assert payload["level"] == "EXPERT_REQUIRED"
         assert payload["triggered_by_outliers"] is True
         assert payload["triggered_by_confidence"] is False
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 3 integration: hallucinations list (issue #63 / B28)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestHallucinationsField:
+    """B28 surfaces an A6 quality score and a `potential_hallucinations`
+    boolean alongside the L6 groundedness signal on every AI-authored
+    tool response. The composition is via
+    `_quality.derive_quality_from_groundedness`, which maps L6
+    signals (overall_score, ungrounded_terms, answer_token_count)
+    into A6's compute_quality_score formula."""
+
+    def test_grounded_input_produces_no_hallucination_flag(self):
+        from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+        gnd = {
+            "verdict": "GROUNDED",
+            "overall_score": 0.95,
+            "ungrounded_terms": ["minor"],
+            "answer_token_count": 100,
+            "provenance_trail": "stub",
+        }
+        quality = derive_quality_from_groundedness(gnd)
+        assert quality["verdict"] == "COMPUTED"
+        assert quality["potential_hallucinations"] is False
+        assert quality["overall_score"] > 0.5
+        # Components are surfaced for downstream consumers.
+        assert "components" in quality
+        assert "relevance" in quality["components"]
+        assert quality["components"]["relevance"] == 0.95
+
+    def test_ungrounded_input_flags_potential_hallucinations(self):
+        from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+        gnd = {
+            "verdict": "UNGROUNDED",
+            "overall_score": 0.4,
+            "ungrounded_terms": ["zeppelin", "convoy", "rapture"],
+            "answer_token_count": 20,
+            "provenance_trail": "stub",
+        }
+        quality = derive_quality_from_groundedness(gnd)
+        assert quality["verdict"] == "COMPUTED"
+        # UNGROUNDED verdict ALONE flips the flag regardless of ratio.
+        assert quality["potential_hallucinations"] is True
+
+    def test_high_ungrounded_ratio_flags_even_when_grounded(self):
+        """If groundedness is technically GROUNDED but the ungrounded-
+        term ratio exceeds the threshold, hallucinations are still
+        flagged. The composition treats hallucination_term_ratio as
+        an independent trigger."""
+        from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+        gnd = {
+            "verdict": "GROUNDED",
+            "overall_score": 0.75,
+            # 50 ungrounded terms out of 100 — ratio 0.5 > default 0.3.
+            "ungrounded_terms": [f"t{i}" for i in range(50)],
+            "answer_token_count": 100,
+            "provenance_trail": "stub",
+        }
+        quality = derive_quality_from_groundedness(gnd)
+        assert quality["potential_hallucinations"] is True
+
+    def test_not_computed_groundedness_passes_through(self):
+        from pm_mcp_servers._quality import derive_quality_from_groundedness
+
+        assert (
+            derive_quality_from_groundedness(None)["verdict"]
+            == "NOT_COMPUTED"
+        )
+        assert (
+            derive_quality_from_groundedness({"verdict": "NOT_COMPUTED"})[
+                "verdict"
+            ]
+            == "NOT_COMPUTED"
+        )
+
+    async def test_assumption_report_response_carries_quality_field(self):
+        """End-to-end on one representative JSON-output tool: the
+        assumption report now carries both `_groundedness` and
+        `_quality` as top-level fields."""
+        import json as _json
+        from datetime import date
+
+        from pm_data_tools.db.store import AssuranceStore
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        store = AssuranceStore()
+        today = str(date.today())
+        store.upsert_assumption(
+            {
+                "id": "QUAL-ASSUMP-001-A001",
+                "project_id": "QUAL-ASSUMP-001",
+                "text": "Schedule depends on supplier delivery",
+                "category": "DELIVERY",
+                "baseline_value": 1.0,
+                "current_value": None,
+                "unit": "boolean",
+                "tolerance_pct": 0.0,
+                "source": "Internal",
+                "external_ref": None,
+                "dependencies": "",
+                "owner": "Tester",
+                "last_validated": None,
+                "created_date": today,
+                "notes": "Impact if false: Schedule slip. | Likelihood: MEDIUM | Validation plan: Quarterly | Status: Open | Review date: " + today,
+            }
+        )
+
+        result = await call_tool(
+            "generate_assumption_report", {"project_id": "QUAL-ASSUMP-001"}
+        )
+        payload = _json.loads(result[0].text)
+        assert "_groundedness" in payload
+        assert "_quality" in payload
+        quality = payload["_quality"]
+        # When L6 is COMPUTED, L3 should also be COMPUTED.
+        if payload["_groundedness"]["verdict"] in ("GROUNDED", "UNGROUNDED"):
+            assert quality["verdict"] == "COMPUTED"
+            assert "potential_hallucinations" in quality

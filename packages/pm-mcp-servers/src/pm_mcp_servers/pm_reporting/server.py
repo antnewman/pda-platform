@@ -26,6 +26,7 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+from pm_mcp_servers._quality import derive_quality_from_groundedness
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -177,7 +178,14 @@ def _attach_groundedness_to_markdown(
             "available from the store at generation time.*\n"
         )
     result = compute_groundedness(document, sources, query=query)
-    return document + _format_groundedness_footer(result.to_dict())
+    gnd_dict = result.to_dict()
+    quality = derive_quality_from_groundedness(gnd_dict)
+    # Stash the quality dict inside the same HTML-comment block as the
+    # groundedness payload so a single block carries both — Evidence
+    # Engine and UDS consumers parse the comment once.
+    combined: dict[str, Any] = dict(gnd_dict)
+    combined["_quality"] = quality
+    return document + _format_groundedness_footer(combined)
 
 server = Server("pm-reporting")
 

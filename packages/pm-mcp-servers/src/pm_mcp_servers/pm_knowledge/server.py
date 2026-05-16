@@ -27,6 +27,7 @@ from pm_mcp_servers._guardrails import (
     build_forbidden_phrase_rule,
     evaluate,
 )
+from pm_mcp_servers._quality import derive_quality_from_groundedness
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -820,6 +821,9 @@ async def _generate_premortem_questions(arguments: dict[str, Any]) -> list[TextC
             "verdict": "NOT_COMPUTED",
             "reason": "No questions emitted; nothing to ground.",
         }
+    result["_quality"] = derive_quality_from_groundedness(
+        result["_groundedness"]
+    )
 
     # Audit-chain entry — record the gate + risk-flag inputs and the
     # number of questions produced. The decision captures whether any
