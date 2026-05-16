@@ -2050,3 +2050,154 @@ class TestAssumptionReportGuardrail:
         assert len(payload["triggered"]) >= 1
         triggered_names = [t["rule_name"] for t in payload["triggered"]]
         assert any("forbidden_phrase" in name for name in triggered_names)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 5 integration: generate_gate_review_summary (issue #38 / B3)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestGateReviewSummaryGuardrail:
+    """Behavioural anchor for the L5 guardrail integration on
+    generate_gate_review_summary.
+
+    The handler returns markdown. The guardrail policy adds gate-
+    specific phrases ("always met", "definitely deliver") to the
+    base overclaim/template-leak set so reviewer-language drift is
+    caught deterministically.
+    """
+
+    def _seed_minimal_project(self, project_id: str = "GATE-GUARDRAIL-TEST"):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Test risk for gate review guardrail",
+                "description": "Seeded for B3 regression test.",
+                "category": "DELIVERY",
+                "likelihood": 4,
+                "impact": 4,
+                "risk_score": 16,
+                "status": "OPEN",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_clean_gate_review_summary_passes_through_as_markdown(
+        self, monkeypatch
+    ):
+        """When Claude returns clean IPA-style prose, the guardrail
+        approves and the markdown response is unchanged."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        # Provide an API key so the handler enters the Claude path.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        # Stub Anthropic client and the Claude call.
+        monkeypatch.setattr(reporting_server, "_get_anthropic_client", lambda: object())
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=3000: (
+                "# Gate 3 Review Summary — GATE-GUARDRAIL-CLEAN\n\n"
+                "**Delivery Confidence Assessment:** AMBER\n\n"
+                "## Executive Summary\n"
+                "Project is broadly on track with managed risks."
+            ),
+        )
+
+        project_id = self._seed_minimal_project("GATE-GUARDRAIL-CLEAN")
+        result = await call_tool(
+            "generate_gate_review_summary",
+            {"project_id": project_id, "gate_number": 3},
+        )
+
+        text = result[0].text
+        # Markdown shape preserved — no JSON wrapper.
+        assert text.startswith("#")
+        assert "Gate 3 Review Summary" in text
+        # No guardrail rejection.
+        assert "guardrail_rejected" not in text
+        # No FLAGGED notice.
+        assert "L5 guardrail flagged" not in text
+
+    async def test_overclaim_phrase_rejects_gate_review_summary(self, monkeypatch):
+        """If Claude returns prose containing an overclaim phrase
+        ("definitely deliver" — gate-specific), the guardrail replaces
+        the response with structured error JSON and suppresses the
+        prose."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(reporting_server, "_get_anthropic_client", lambda: object())
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=3000: (
+                "# Gate 3 Review Summary\n\n"
+                "## Executive Summary\n"
+                "The project will definitely deliver on time and to budget."
+            ),
+        )
+
+        project_id = self._seed_minimal_project("GATE-GUARDRAIL-REJECT")
+        result = await call_tool(
+            "generate_gate_review_summary",
+            {"project_id": project_id, "gate_number": 3},
+        )
+
+        text = result[0].text
+        # The original prose is suppressed — the offending sentence
+        # (NOT the bare forbidden token, which legitimately appears in
+        # the rule's description as metadata) must not appear.
+        assert "deliver on time and to budget" not in text
+        payload = _json.loads(text)
+        assert payload["error"] == "guardrail_rejected"
+        assert payload["verdict"] == "REJECTED"
+        # Error message references the document kind.
+        assert "gate review summary" in payload["message"]
+        # Triggered list includes a forbidden_phrase rule.
+        triggered_names = [t["rule_name"] for t in payload["triggered"]]
+        assert any("forbidden_phrase" in name for name in triggered_names)
+
+    async def test_template_leak_in_gate_review_summary_is_rejected(
+        self, monkeypatch
+    ):
+        """Template-leak phrases are rejected on the gate-review path
+        too."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(reporting_server, "_get_anthropic_client", lambda: object())
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=3000: (
+                "# Gate 3 Review Summary\n\n"
+                "## Executive Summary\n"
+                "INSERT NARRATIVE HERE — TODO before submission."
+            ),
+        )
+
+        project_id = self._seed_minimal_project("GATE-GUARDRAIL-LEAK")
+        result = await call_tool(
+            "generate_gate_review_summary",
+            {"project_id": project_id, "gate_number": 3},
+        )
+
+        payload = _json.loads(result[0].text)
+        assert payload["error"] == "guardrail_rejected"
