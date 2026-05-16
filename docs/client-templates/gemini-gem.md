@@ -167,7 +167,7 @@ Name the connection **PDA Platform**.
 
 **Step 3 — Verify the connection**
 
-Start a new conversation with this Gem and ask: "How many tools do you have access to from the PDA Platform?" A correctly connected instance will report 103 tools across 15 modules.
+Start a new conversation with this Gem and ask: "How many tools do you have access to from the PDA Platform?" A correctly connected instance will report 126 tools across 18 modules.
 
 ### Using this Gem without MCP tools
 

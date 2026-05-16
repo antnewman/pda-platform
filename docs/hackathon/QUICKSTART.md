@@ -1,6 +1,6 @@
 # Connect to the PDA Platform
 
-The PDA Platform is a live MCP server with 58 project assurance tools. Connect in under 30 seconds.
+The PDA Platform is a live MCP server with 126 project assurance tools across 18 modules. Connect in under 30 seconds.
 
 **Server URL:** `https://pda-platform-i33p.onrender.com/sse`
 
@@ -15,7 +15,7 @@ The PDA Platform is a live MCP server with 58 project assurance tools. Connect i
 5. **Name:** `PDA Platform`
 6. **URL:** `https://pda-platform-i33p.onrender.com/sse`
 7. Click **Connect**
-8. Return to a new chat — the 58 PDA tools will appear in the tools menu
+8. Return to a new chat — the 126 PDA tools will appear in the tools menu
 
 **Note:** The first request may take 30-60 seconds if the server is cold (free tier). Subsequent requests are instant.
 
@@ -71,7 +71,7 @@ The PDA Platform REST API is also available at:
 
 ## What's Available
 
-58 tools across six modules:
+126 tools across 18 modules. Highlights:
 
 ### Project Data (6 tools)
 - Load MS Project, Primavera P6, Jira, Monday, Smartsheet, GMPP, and NISTA files

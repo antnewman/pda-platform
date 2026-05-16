@@ -688,3 +688,61 @@ whether the schedule reflects recent actuals, ask your planner to confirm before
 running analysis.  Running detect_outliers can also surface indicators of stale
 data, such as tasks with dates that have passed but whose progress has not been
 updated.
+
+## evaluate_calibration — measuring how well-calibrated your forecasts are
+
+A **calibrated** forecaster has confidence equal to accuracy on every subset of
+its predictions.  If you say five projects have an 80% chance of meeting their
+Gate 3 milestone, you'd expect four of them to actually meet it.  When forecasts
+are systematically over- or under-confident, the headline DCA distribution stops
+being a useful planning signal.
+
+`evaluate_calibration` measures this empirically.  You supply a paired list of
+predictions (your confidence scores, between 0 and 1) and actuals (what
+happened, encoded as 1 = forecast met, 0 = missed), and it returns the
+**Expected Calibration Error** plus per-bin reliability-diagram data.
+
+### Worked example
+
+You ran `score_assumption_confidence` quarterly for the past year and have
+recorded which assumptions turned out to be valid.  Run:
+
+```
+evaluate_calibration —
+  predictions: [0.95, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35]
+  actuals:     [1,    1,    1,    1,    0,    0,    0]
+  n_bins: 7
+  project_id: "PRJ-ALPHA"
+```
+
+A perfectly-calibrated forecaster in this example would produce ECE close to
+zero.  If you get ECE = 0.08, the interpretation tells you it's acceptable but
+not excellent — and points you at **temperature scaling** as the standard
+correction.  Above ECE = 0.15 you're materially overconfident or
+underconfident and should not be using the raw probabilities for board
+decisions until they're recalibrated.
+
+The `bins` output is a reliability-diagram dataset ready to plot: each bin
+carries its confidence range (`lower`, `upper`), how many samples fall in it
+(`count`), the mean confidence and mean accuracy within the bin
+(`mean_confidence`, `mean_accuracy`), and the gap between them (`gap`).  A
+visualisation tool can render this directly.
+
+### When to use
+
+- After a gate review, to check whether the RAG ratings used by the team in
+  the run-up actually predicted gate outcomes.
+- Quarterly, on assumption-confidence outputs, to detect drift between
+  forecast confidence and observed outcomes.
+- Before relying on AI-generated confidence scores for budget-setting, to
+  satisfy the HMT Green Book optimism-bias check.
+
+### Limitations
+
+- Requires a history of forecast/actual pairs.  Not useful for one-off point
+  forecasts.
+- Binary outcomes only (0/1).  Multi-class calibration would need a future
+  extension.
+- Sample size matters: ECE on fewer than 50 paired observations is noisy.
+
+---
