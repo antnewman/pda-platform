@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
@@ -27,6 +28,71 @@ from .models import AnalysisDepth, AnalysisMetadata, ForecastMethod
 from .risk_engine import RiskEngine
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 6 — Groundedness checking for narrative-divergence analysis
+# ─────────────────────────────────────────────────────────────────────────
+# `detect_narrative_divergence` accepts a free-text narrative and
+# returns Claude-authored classifications (SUPPORTED, CONTRADICTED,
+# UNVERIFIABLE) plus evidence strings. The L6 check measures how well
+# the Claude-authored explanations are grounded in the underlying
+# project data — risks, gate readiness, financials. A high
+# groundedness score means the analysis is anchored in the data;
+# a low score means the analysis is making claims the data doesn't
+# support. Either way the result is informational and added as a
+# top-level ``_groundedness`` field. L5 still gates separately.
+
+
+def _attach_groundedness_to_divergence_result(
+    result: dict[str, Any],
+    data_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Add a ``_groundedness`` field to the divergence-analysis result.
+
+    The "answer" is the concatenation of every Claude-authored field
+    (flag claims, supported-claim text, unverifiable reasons, plus
+    the evidence strings). The "sources" are the project data
+    elements that fed the analysis (risks, gate readiness, financial
+    data, benefits — exactly what ``detect_narrative_divergence``
+    pulls from the store).
+    """
+    answer_parts: list[str] = []
+    for flag in result.get("flags", []) or []:
+        answer_parts.append(str(flag.get("claim", "")))
+        answer_parts.append(str(flag.get("evidence", "")))
+    for sc in result.get("supported_claims", []) or []:
+        answer_parts.append(str(sc.get("claim", "")))
+        answer_parts.append(str(sc.get("evidence", "")))
+    for uc in result.get("unverifiable_claims", []) or []:
+        answer_parts.append(str(uc.get("claim", "")))
+        answer_parts.append(str(uc.get("reason", "")))
+    answer = "\n".join(p for p in answer_parts if p)
+
+    sources: list[dict[str, Any]] = []
+    for key, value in (data_summary or {}).items():
+        if not value:
+            continue
+        sources.append(
+            {
+                "id": str(key),
+                "content": __import__("json").dumps(value, default=str),
+            }
+        )
+
+    new_result = dict(result)
+    if not answer.strip() or not sources:
+        new_result["_groundedness"] = {
+            "verdict": "NOT_COMPUTED",
+            "reason": "No analysis content or no source data available.",
+        }
+        return new_result
+
+    gnd = compute_groundedness(
+        answer, sources, query="detect_narrative_divergence"
+    )
+    new_result["_groundedness"] = gnd.to_dict()
+    return new_result
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1181,18 +1247,23 @@ Only output the JSON. Do not add any commentary before or after."""
     else:
         overall_assessment = "MINOR_DIVERGENCE"
 
-    return _apply_narrative_divergence_guardrail({
-        "project_id": project_id,
-        "overall_assessment": overall_assessment,
-        "divergence_score": round(divergence_score, 3),
-        "claims_assessed": total_claims,
-        "contradictions": contradictions,
-        "flags": flags,
-        "supported_claims": supported_claims,
-        "unverifiable_claims": unverifiable_claims,
-        "data_used": data_used,
-        "data_gaps": data_gaps,
-    })
+    return _apply_narrative_divergence_guardrail(
+        _attach_groundedness_to_divergence_result(
+            {
+                "project_id": project_id,
+                "overall_assessment": overall_assessment,
+                "divergence_score": round(divergence_score, 3),
+                "claims_assessed": total_claims,
+                "contradictions": contradictions,
+                "flags": flags,
+                "supported_claims": supported_claims,
+                "unverifiable_claims": unverifiable_claims,
+                "data_used": data_used,
+                "data_gaps": data_gaps,
+            },
+            data_summary,
+        )
+    )
 
 # ============================================================================
 # Tool 7: Detect Narrative Divergence
