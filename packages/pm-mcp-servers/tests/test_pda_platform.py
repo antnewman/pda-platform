@@ -3605,3 +3605,149 @@ class TestPirTemplateGroundedness:
         end = text.index("-->", start)
         gnd = _json.loads(text[start:end].strip())
         assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 8 integration: pm-assure audit chain (issue #54 / B19)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPmAssureAuditChain:
+    """L8 records every decision-producing handler in pm-assure into a
+    file-backed tamper-evident chain. Four handlers are now audited:
+    assess_gate_readiness, scan_for_red_flags, log_override_decision,
+    run_assurance_workflow.
+
+    Tests monkeypatch the audit-dir to a per-test tmp_path so the
+    real operator audit log is untouched. Each test resets the
+    in-memory chain cache so a fresh chain starts from the new dir.
+    """
+
+    def _setup_isolated_audit(self, monkeypatch, tmp_path):
+        from pm_mcp_servers import _audit as audit_mod
+
+        # Point the audit dir at a per-test tmp path AND drop the
+        # cached in-memory chain so the next record starts in the new
+        # location.
+        audit_mod._refresh_audit_dir_for_testing(tmp_path / "audit")
+        # Ensure no signing key — keep tests deterministic.
+        monkeypatch.delenv("PDA_AUDIT_SIGNING_KEY", raising=False)
+        return audit_mod
+
+    async def test_assess_gate_readiness_appends_audit_entry(
+        self, monkeypatch, tmp_path
+    ):
+        """A successful assess_gate_readiness invocation appends one
+        entry to the chain and the chain still verifies after."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+
+        # Seed enough store data that the assessor can score the gate.
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": "AUDIT-GATE-001-R001",
+                "project_id": "AUDIT-GATE-001",
+                "title": "Test risk",
+                "description": "Seeded.",
+                "category": "DELIVERY",
+                "likelihood": 3,
+                "impact": 3,
+                "risk_score": 9,
+                "status": "OPEN",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+        await call_tool(
+            "assess_gate_readiness",
+            {"project_id": "AUDIT-GATE-001", "gate": "GATE_3"},
+        )
+
+        # One entry appended.
+        chain, _, log_path = audit_mod._get_chain("pm_assure")
+        assert len(chain) == 1
+        entry = chain.entries[0]
+        assert entry.action == "assess_gate_readiness"
+        # The on-disk file mirrors the in-memory chain.
+        assert log_path.exists()
+        with open(log_path, encoding="utf-8") as f:
+            lines = [line for line in f if line.strip()]
+        assert len(lines) == 1
+        # Chain integrity verifies.
+        assert audit_mod.verify_chain("pm_assure").is_valid
+
+    async def test_red_flags_decision_classified_into_verdict(
+        self, monkeypatch, tmp_path
+    ):
+        """scan_for_red_flags appends an entry whose decision string
+        reflects the highest-severity flag set surfaced."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+
+        await call_tool(
+            "scan_for_red_flags",
+            {"project_id": "AUDIT-RED-001"},
+        )
+        chain, _, _ = audit_mod._get_chain("pm_assure")
+        assert len(chain) == 1
+        decision = chain.entries[0].decision
+        assert decision in {
+            "RED_FLAGS_CRITICAL",
+            "RED_FLAGS_HIGH",
+            "RED_FLAGS_MEDIUM",
+            "NO_RED_FLAGS",
+        }
+
+    async def test_chain_links_across_multiple_calls_and_detects_tampering(
+        self, monkeypatch, tmp_path
+    ):
+        """Two sequential calls produce a linked chain. Hand-editing
+        any entry on disk and re-hydrating the chain detects the
+        tamper."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+
+        for project_id in ("AUDIT-CHAIN-001", "AUDIT-CHAIN-002"):
+            await call_tool(
+                "scan_for_red_flags",
+                {"project_id": project_id},
+            )
+
+        chain, _, log_path = audit_mod._get_chain("pm_assure")
+        assert len(chain) == 2
+        # The second entry references the first via previous_entry_hash.
+        assert chain.entries[1].previous_entry_hash == chain.entries[0].entry_hash
+        assert audit_mod.verify_chain("pm_assure").is_valid
+
+        # Tamper with the first entry's decision string on disk, then
+        # re-hydrate by clearing the in-memory cache (NOT the disk
+        # log) and calling verify.
+        with open(log_path, encoding="utf-8") as f:
+            lines = [line for line in f if line.strip()]
+        first = _json.loads(lines[0])
+        first["decision"] = "TAMPERED"
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(_json.dumps(first) + "\n")
+            for line in lines[1:]:
+                f.write(line if line.endswith("\n") else line + "\n")
+        # Clear the in-memory cache so the next verify_chain hydrates
+        # from the (tampered) disk log. Reach into the private cache
+        # directly here rather than reset_for_testing, which would
+        # also delete the disk log we want to inspect.
+        audit_mod._CHAINS.pop("pm_assure", None)
+        audit_mod._LOCKS.pop("pm_assure", None)
+        result = audit_mod.verify_chain("pm_assure")
+        assert not result.is_valid
+        assert result.status == "TAMPERED"

@@ -17,7 +17,48 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from pm_mcp_servers._audit import record_decision
+
 app = Server("pm-assure-server")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain
+# ─────────────────────────────────────────────────────────────────────────
+# Every decision-producing handler in pm-assure appends a tamper-evident
+# entry to a module-level audit chain via
+# ``pm_mcp_servers._audit.record_decision``. The chain is persisted as
+# JSONL under ``$PDA_AUDIT_DIR/pm_assure.jsonl``; optional HMAC signing
+# via ``PDA_AUDIT_SIGNING_KEY``. Failures are caught and swallowed so a
+# disk-full or permissions error never breaks a tool invocation — the
+# tool would still produce correct output; the audit chain would simply
+# miss the entry.
+
+_AUDIT_MODULE = "pm_assure"
+
+
+def _safe_record_decision(
+    *,
+    input_data: Any,
+    output_data: Any,
+    decision: str,
+    action: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        # Audit failures must not break tool output. Operators inspect
+        # chain integrity via verify_chain("pm_assure") on demand.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1541,6 +1582,22 @@ async def _log_override_decision(
             "message": f"Override decision logged with id '{logged.id}'.",
         }
 
+        _safe_record_decision(
+            input_data={
+                "project_id": logged.project_id,
+                "override_type": output["override_type"],
+                "decision_date": output["decision_date"],
+                "authoriser": output["authoriser"],
+                "has_rationale": bool(arguments.get("rationale")),
+            },
+            output_data={
+                "id": output["id"],
+                "outcome": output["outcome"],
+            },
+            decision=output["outcome"],
+            action="log_override_decision",
+            metadata={"override_type": output["override_type"]},
+        )
         return [
             TextContent(
                 type="text",
@@ -1994,6 +2051,25 @@ async def _run_assurance_workflow(arguments: dict[str, Any]) -> list[TextContent
             "executive_summary": result.executive_summary,
         }
 
+        _safe_record_decision(
+            input_data={
+                "project_id": output["project_id"],
+                "workflow_type": output["workflow_type"],
+                "artefact_count": len(artefacts or []),
+            },
+            output_data={
+                "id": output["id"],
+                "health": output["health"],
+                "step_count": len(output["steps"]),
+                "aggregated_signal_count": len(output["aggregated_risk_signals"]),
+            },
+            decision=output["health"],
+            action="run_assurance_workflow",
+            metadata={
+                "duration_ms": output["duration_ms"],
+                "workflow_type": output["workflow_type"],
+            },
+        )
         return [
             TextContent(
                 type="text",
@@ -2957,6 +3033,24 @@ async def _assess_gate_readiness(arguments: dict[str, Any]) -> list[TextContent]
             "executive_summary": result.executive_summary,
         }
 
+        _safe_record_decision(
+            input_data={
+                "project_id": arguments["project_id"],
+                "gate": arguments["gate"],
+            },
+            output_data={
+                "readiness": output["readiness"],
+                "composite_score": output["composite_score"],
+                "blocking_issues_count": len(output.get("blocking_issues") or []),
+            },
+            decision=output["readiness"],
+            action="assess_gate_readiness",
+            metadata={
+                "gate": output["gate"],
+                "dimensions_scored": output["dimensions_scored"],
+                "dimensions_total": output["dimensions_total"],
+            },
+        )
         return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
 
     except Exception as exc:
@@ -3559,6 +3653,32 @@ async def _scan_for_red_flags(arguments: dict[str, Any]) -> list[TextContent]:
             "scan_timestamp": datetime.now(tz=timezone.utc).isoformat(),
         }
 
+        # Audit-chain entry — record the verdict shape (counts only,
+        # not the full flag bodies) so the entry is compact but the
+        # decision summary is verifiable.
+        if critical_count >= 1:
+            verdict = "RED_FLAGS_CRITICAL"
+        elif high_count >= 1:
+            verdict = "RED_FLAGS_HIGH"
+        elif medium_count >= 1:
+            verdict = "RED_FLAGS_MEDIUM"
+        else:
+            verdict = "NO_RED_FLAGS"
+        _safe_record_decision(
+            input_data={
+                "project_id": project_id,
+                "severity_threshold": severity_threshold,
+            },
+            output_data={
+                "total": len(flags),
+                "critical": critical_count,
+                "high": high_count,
+                "medium": medium_count,
+            },
+            decision=verdict,
+            action="scan_for_red_flags",
+            metadata={"data_gaps_count": len(data_gaps)},
+        )
         return [TextContent(type="text", text=json.dumps(output, indent=2, default=str))]
 
     except Exception as exc:
