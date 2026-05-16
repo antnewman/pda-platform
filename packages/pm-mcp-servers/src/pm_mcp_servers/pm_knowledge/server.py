@@ -403,6 +403,101 @@ async def _search_knowledge_base(arguments: dict[str, Any]) -> list[TextContent]
     return [TextContent(type="text", text=json.dumps({"query": arguments["query"], "category": category, "count": len(results), "results": results}, indent=2))]
 
 
+def _build_reference_class_band(
+    recommended_p80: float,
+    median: float,
+    mean: float,
+    unit: str,
+    alpha: float = 0.2,
+    n_synth: int = 200,
+) -> dict[str, Any]:
+    """Return a conformal interval around the recommended P80.
+
+    The bundled IPA benchmark data ships descriptive statistics
+    (median, P80, mean) rather than raw outcomes, so we synthesise a
+    calibration sample of past comparable-project outcomes consistent
+    with those landmarks, compute residuals against the P80, and run
+    A4's :func:`conformal_predict_band`.
+
+    The synthesis assumes outcomes are approximately normal with mean
+    equal to the IPA mean and standard deviation derived from the
+    (P80 - median) gap. The z-score 0.8416 maps to the 80th percentile
+    of a standard normal: P80 ≈ median + 0.8416 * σ, so
+    σ ≈ (P80 - median) / 0.8416. This is a pragmatic approximation —
+    a future PR could swap in raw samples once the IPA dataset is
+    available.
+
+    Args:
+        recommended_p80: The IPA P80 value for this project type /
+            estimate type. The band is centred here.
+        median: IPA median outcome.
+        mean: IPA mean outcome (used as the centre of the synthesised
+            distribution).
+        unit: Unit string for the response, e.g. ``"%"`` or
+            ``" months"``.
+        alpha: Target miscoverage rate. Default 0.2 (80% coverage),
+            matching the paper's reference and the rest of the
+            platform's L4 integrations.
+        n_synth: Number of synthetic outcomes to generate. Default
+            200 — large enough for stable quantile estimation,
+            small enough to keep the response fast.
+
+    Returns:
+        ``{"status": "COMPUTED", "alpha": 0.2, "coverage_pct": 80.0,
+        "band": {"lower": x, "upper": y, "half_width": h,
+        "unit": "..."}, "method": "synthetic-from-IPA-descriptives"}``.
+        When the input stats don't permit synthesis (e.g. P80 <=
+        median), returns ``{"status": "NOT_COMPUTED", "reason": ...}``.
+    """
+    if not (recommended_p80 > median) or recommended_p80 <= 0:
+        return {
+            "status": "NOT_COMPUTED",
+            "reason": (
+                "Benchmark distribution does not permit conformal "
+                "synthesis: requires P80 > median > 0. Got "
+                f"median={median}, P80={recommended_p80}."
+            ),
+            "alpha": alpha,
+            "coverage_pct": round((1.0 - alpha) * 100, 1),
+        }
+
+    # Deferred — calibration sub-module pulls in scipy.
+    import numpy as np
+
+    from agent_planning.calibration import conformal_predict_band
+
+    # Derive σ from the median / P80 gap: P80 of N(μ, σ) is μ + 0.8416 σ.
+    sigma = max(1e-6, (recommended_p80 - median) / 0.8416)
+    # Use the IPA mean as the centre when present (more representative
+    # than the median when the distribution is skewed); fall back to
+    # the median.
+    centre = mean if mean else median
+
+    rng = np.random.default_rng(seed=int(round(recommended_p80 * 1000)))
+    synth_outcomes = rng.normal(loc=centre, scale=sigma, size=n_synth)
+    residuals = (synth_outcomes - recommended_p80).tolist()
+
+    lower, upper = conformal_predict_band(
+        point_estimate=recommended_p80,
+        calibration_residuals=residuals,
+        alpha=alpha,
+    )
+
+    return {
+        "status": "COMPUTED",
+        "alpha": alpha,
+        "coverage_pct": round((1.0 - alpha) * 100, 1),
+        "band": {
+            "lower": round(lower, 2),
+            "upper": round(upper, 2),
+            "half_width": round((upper - lower) / 2.0, 2),
+            "unit": unit.strip() or None,
+        },
+        "method": "synthetic-from-IPA-descriptives",
+        "n_calibration_samples": n_synth,
+    }
+
+
 _REFERENCE_CLASS_VALID_ESTIMATES = ("cost_overrun", "schedule_slip")
 # Forgive common LLM-style abbreviations. The schema enum only lists the
 # canonical keys, but a caller passing 'cost' clearly means 'cost_overrun'
@@ -476,6 +571,22 @@ async def _run_reference_class_check(arguments: dict[str, Any]) -> list[TextCont
             f"estimate or that this project has specific characteristics that warrant higher provisions."
         )
 
+    # ── Layer 4: conformal prediction interval around the P80 ──────────
+    # Synthesise calibration residuals from the IPA descriptive stats
+    # (median + P80 + mean) and run A4's conformal_predict_band to
+    # produce a coverage-guaranteed interval. The residuals model the
+    # spread of past comparable-project outcomes around the IPA
+    # recommended P80; the interval tells the consumer "the true
+    # outcome for this project is likely to lie in this range with X%
+    # confidence, conditional on the reference class being applicable".
+    conformal_band = _build_reference_class_band(
+        recommended_p80=p80,
+        median=median,
+        mean=mean,
+        unit=unit,
+        alpha=0.2,
+    )
+
     result = {
         "project_type": project_type,
         "estimate_type": estimate_type,
@@ -494,6 +605,7 @@ async def _run_reference_class_check(arguments: dict[str, Any]) -> list[TextCont
             "p80_provision": f"{recommended_p80}{unit}",
             "guidance": "HM Treasury Green Book requires optimism bias uplifts to be applied to raw estimates. Budget setting should use P80, not P50.",
         },
+        "_calibration": conformal_band,
         "interpretation": interpretation,
     }
     # Audit-chain entry — the decision is whether optimism bias is

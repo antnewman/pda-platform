@@ -4402,3 +4402,80 @@ class TestMonteCarloConformalBands:
         # The residual is computed from predicted/actual when absent.
         match = next(r for r in rows if r["id"] == "SIM-CB-STORE-001")
         assert abs(match["residual"] - 8.0) < 1e-9
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 4 integration: reference-class conformal band (issue #61 / B26)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestReferenceClassConformalInterval:
+    """L4 wraps run_reference_class_check's P80 in a conformal band
+    synthesised from the IPA benchmark descriptors (median, P80,
+    mean). The band tells a Green Book reviewer "the true outcome is
+    likely to fall in this range with X% confidence based on the
+    reference class"."""
+
+    async def test_reference_class_carries_conformal_band(self):
+        """A normal run produces `_calibration.status == COMPUTED`
+        with a centred band around the IPA P80."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = await call_tool(
+            "run_reference_class_check",
+            {
+                "project_type": "IT_AND_DIGITAL",
+                "estimate_type": "cost_overrun",
+                "submitted_value": 15.0,
+            },
+        )
+        payload = _json.loads(result[0].text)
+        assert "_calibration" in payload
+        calib = payload["_calibration"]
+        assert calib["status"] == "COMPUTED"
+        assert calib["coverage_pct"] == 80.0
+        band = calib["band"]
+        assert band["lower"] < band["upper"]
+        assert band["half_width"] > 0
+        # Method is recorded so consumers know provenance.
+        assert calib["method"] == "synthetic-from-IPA-descriptives"
+
+    def test_band_widens_when_distribution_is_wider(self):
+        """A wider (P80 - median) gap implies higher implied sigma,
+        so the conformal half-width grows accordingly."""
+        from pm_mcp_servers.pm_knowledge.server import (
+            _build_reference_class_band,
+        )
+
+        narrow = _build_reference_class_band(
+            recommended_p80=20.0,
+            median=15.0,  # gap = 5
+            mean=15.0,
+            unit="%",
+        )
+        wide = _build_reference_class_band(
+            recommended_p80=20.0,
+            median=5.0,  # gap = 15
+            mean=5.0,
+            unit="%",
+        )
+        assert narrow["status"] == "COMPUTED"
+        assert wide["status"] == "COMPUTED"
+        assert wide["band"]["half_width"] > narrow["band"]["half_width"]
+
+    def test_invalid_distribution_returns_not_computed(self):
+        """If P80 <= median the synthesis can't run."""
+        from pm_mcp_servers.pm_knowledge.server import (
+            _build_reference_class_band,
+        )
+
+        result = _build_reference_class_band(
+            recommended_p80=10.0,
+            median=12.0,  # median > p80 — not a valid IPA distribution
+            mean=11.0,
+            unit="%",
+        )
+        assert result["status"] == "NOT_COMPUTED"
+        assert "P80 > median" in result["reason"]
