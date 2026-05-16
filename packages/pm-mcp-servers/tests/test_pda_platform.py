@@ -2846,3 +2846,125 @@ class TestPirTemplateGuardrail:
         payload = _json.loads(text)
         assert payload["error"] == "guardrail_rejected"
         assert "PIR template" in payload["message"]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 6 integration: generate_board_exception_report (issue #45 / B10)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestBoardExceptionReportGroundedness:
+    """Behavioural anchor for the L6 groundedness integration on
+    generate_board_exception_report.
+
+    L6 is informational — it does NOT gate the response (that is L5's
+    job). It appends a visible groundedness footer to the markdown so
+    a reviewer sees how well the AI's prose is supported by the
+    underlying source data. The structured ``_groundedness`` dict is
+    embedded in an HTML comment for Evidence-Engine / UDS consumers.
+    """
+
+    def _seed_minimal_project(self, project_id: str = "BOARD-GROUND-TEST"):
+        from datetime import datetime
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        now = datetime.utcnow().isoformat()
+        store.upsert_risk(
+            {
+                "id": f"{project_id}-R001",
+                "project_id": project_id,
+                "title": "Cyber security control gap",
+                "description": "Penetration test identified two unpatched servers.",
+                "category": "TECHNICAL",
+                "likelihood": 4,
+                "impact": 4,
+                "risk_score": 16,
+                "status": "OPEN",
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        return project_id
+
+    async def test_clean_evidence_only_report_carries_groundedness_footer(
+        self, monkeypatch
+    ):
+        """The evidence-only fallback document is composed directly from
+        store data, so its tokens overlap heavily with the source
+        content — the groundedness verdict should be GROUNDED and the
+        footer (both human-readable line and machine-readable HTML
+        comment) should appear on the markdown response."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        project_id = self._seed_minimal_project("BOARD-GROUND-CLEAN")
+        result = await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+        text = result[0].text
+        # Markdown response shape preserved.
+        assert text.startswith("#") or "Exception Report" in text
+        # Human-readable groundedness line present.
+        assert "Groundedness:" in text
+        # Machine-readable comment present.
+        assert "<!-- _groundedness:" in text
+        # Parse the machine-readable block to confirm structure.
+        start = text.index("<!-- _groundedness:") + len("<!-- _groundedness:")
+        end = text.index("-->", start)
+        gnd = _json.loads(text[start:end].strip())
+        assert gnd["verdict"] in ("GROUNDED", "UNGROUNDED")
+        assert "overall_score" in gnd
+        assert isinstance(gnd["ungrounded_terms"], list)
+        assert "provenance_trail" in gnd
+
+    async def test_hallucinated_phrase_in_claude_output_produces_ungrounded_terms(
+        self, monkeypatch
+    ):
+        """When Claude's output includes terms that appear in no source
+        (a hallucination), those terms appear in the
+        ``_groundedness.ungrounded_terms`` list. L6 does not block the
+        response — it surfaces the unsupported terms for human review."""
+        import json as _json
+
+        from pm_mcp_servers.pda_platform.server import call_tool
+        from pm_mcp_servers.pm_reporting import server as reporting_server
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setattr(
+            reporting_server, "_get_anthropic_client", lambda: object()
+        )
+        # Claude emits a sentence containing a term ("zeppelin") that
+        # absolutely does not appear in the project data. L6 catches
+        # it.
+        monkeypatch.setattr(
+            reporting_server,
+            "_call_claude",
+            lambda _c, _p, max_tokens=2000: (
+                "# Board Exception Report\n\n"
+                "## Exception 1: Programme schedule\n"
+                "The programme requires an additional zeppelin convoy "
+                "to recover the schedule risk identified in the latest "
+                "review."
+            ),
+        )
+
+        project_id = self._seed_minimal_project("BOARD-GROUND-UNG")
+        result = await call_tool(
+            "generate_board_exception_report", {"project_id": project_id}
+        )
+        text = result[0].text
+        # Response carries the footer.
+        assert "Groundedness:" in text
+        # Extract the structured block.
+        start = text.index("<!-- _groundedness:") + len("<!-- _groundedness:")
+        end = text.index("-->", start)
+        gnd = _json.loads(text[start:end].strip())
+        # The hallucinated term is in the ungrounded list.
+        assert "zeppelin" in gnd["ungrounded_terms"]
+        # L6 is informational; the response is still the markdown
+        # report, not a guardrail rejection.
+        assert "guardrail_rejected" not in text
