@@ -3751,3 +3751,127 @@ class TestPmAssureAuditChain:
         result = audit_mod.verify_chain("pm_assure")
         assert not result.is_valid
         assert result.status == "TAMPERED"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Verified Autonomy — Layer 8 integration: pm-assumptions audit chain (issue #55 / B20)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestPmAssumptionsAuditChain:
+    """L8 records pm-assumptions decisions: score_assumption_confidence,
+    detect_external_drift, generate_assumption_report. The chain key
+    is `pm_assumptions` — distinct from pm_assure so the two modules'
+    audit logs are independent files."""
+
+    def _setup_isolated_audit(self, monkeypatch, tmp_path):
+        from pm_mcp_servers import _audit as audit_mod
+
+        audit_mod._refresh_audit_dir_for_testing(tmp_path / "audit")
+        monkeypatch.delenv("PDA_AUDIT_SIGNING_KEY", raising=False)
+        return audit_mod
+
+    def _seed_assumptions(self, project_id: str):
+        from datetime import date
+
+        from pm_data_tools.db.store import AssuranceStore
+
+        store = AssuranceStore()
+        today = str(date.today())
+        for i in range(2):
+            store.upsert_assumption(
+                {
+                    "id": f"{project_id}-A{i:03d}",
+                    "project_id": project_id,
+                    "text": f"Schedule milestone {i} depends on supplier delivery",
+                    "category": "DELIVERY",
+                    "baseline_value": 1.0,
+                    "current_value": None,
+                    "unit": "boolean",
+                    "tolerance_pct": 0.0,
+                    "source": "Internal estimate",
+                    "external_ref": None,
+                    "dependencies": "",
+                    "owner": "Test Owner",
+                    "last_validated": None,
+                    "created_date": today,
+                    "notes": (
+                        "Impact if false: Schedule slippage. | "
+                        "Likelihood: MEDIUM | "
+                        "Validation plan: Quarterly review | "
+                        "Status: Open | "
+                        f"Review date: {today}"
+                    ),
+                }
+            )
+        return project_id
+
+    async def test_score_assumption_confidence_records_rag_verdict(
+        self, monkeypatch, tmp_path
+    ):
+        """A score_assumption_confidence call appends one entry whose
+        decision is the highest-severity RAG band present (RED,
+        AMBER, or GREEN)."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        project_id = self._seed_assumptions("AUDIT-CONF-001")
+        await call_tool(
+            "score_assumption_confidence", {"project_id": project_id}
+        )
+
+        chain, _, _ = audit_mod._get_chain("pm_assumptions")
+        assert len(chain) == 1
+        entry = chain.entries[0]
+        assert entry.action == "score_assumption_confidence"
+        assert entry.decision in {
+            "ASSUMPTIONS_RED",
+            "ASSUMPTIONS_AMBER",
+            "ASSUMPTIONS_GREEN",
+        }
+        assert audit_mod.verify_chain("pm_assumptions").is_valid
+
+    async def test_pm_assumptions_chain_isolated_from_pm_assure(
+        self, monkeypatch, tmp_path
+    ):
+        """The two modules' chains live in different JSONL files and
+        do NOT cross-link. Recording into one leaves the other
+        empty."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        project_id = self._seed_assumptions("AUDIT-ISO-001")
+        await call_tool(
+            "score_assumption_confidence", {"project_id": project_id}
+        )
+
+        # pm_assumptions chain has the entry...
+        ass_chain, _, ass_path = audit_mod._get_chain("pm_assumptions")
+        assert len(ass_chain) == 1
+        assert ass_path.name == "pm_assumptions.jsonl"
+        # ...but the pm_assure chain stays empty (different file).
+        assure_chain, _, assure_path = audit_mod._get_chain("pm_assure")
+        assert len(assure_chain) == 0
+        assert assure_path.name == "pm_assure.jsonl"
+        assert ass_path != assure_path
+
+    async def test_generate_assumption_report_records_audit_entry(
+        self, monkeypatch, tmp_path
+    ):
+        """Generating the executive assumption report appends an
+        entry recording the overall verdict and the assumption /
+        signal counts."""
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        audit_mod = self._setup_isolated_audit(monkeypatch, tmp_path)
+        project_id = self._seed_assumptions("AUDIT-REP-001")
+        await call_tool(
+            "generate_assumption_report", {"project_id": project_id}
+        )
+        chain, _, _ = audit_mod._get_chain("pm_assumptions")
+        assert len(chain) == 1
+        entry = chain.entries[0]
+        assert entry.action == "generate_assumption_report"
+        # Metadata captures the source counts.
+        assert "assumption_count" in entry.metadata
+        assert entry.metadata["assumption_count"] >= 1

@@ -29,7 +29,41 @@ from typing import Any
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
+from pm_mcp_servers._audit import record_decision
 from pm_mcp_servers._groundedness import compute_groundedness
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Layer 8 — Cryptographic audit chain
+# ─────────────────────────────────────────────────────────────────────────
+# pm-assumptions decisions (confidence scoring, drift detection,
+# executive report assembly) are chained for tamper-evidence. Same
+# pattern as pm-assure: best-effort recording via _safe_record_decision
+# so a disk/permissions failure never breaks tool output.
+
+_AUDIT_MODULE = "pm_assumptions"
+
+
+def _safe_record_decision(
+    *,
+    input_data: object,
+    output_data: object,
+    decision: str,
+    action: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort audit-chain record. Never raises."""
+    try:
+        record_decision(
+            _AUDIT_MODULE,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception:
+        pass
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
@@ -991,6 +1025,26 @@ async def _score_assumption_confidence(arguments: dict) -> list[TextContent]:
         # Sort: lowest confidence first
         scored.sort(key=lambda x: x["score"])
 
+        # Audit-chain entry — record the verdict shape (RAG counts and
+        # total) without storing every per-assumption score in the
+        # chain. The decision string is the highest-severity RAG band
+        # present, so the chain answers "what was the worst-case
+        # assumption-confidence outcome for this project?" cleanly.
+        if rag_counts["RED"] > 0:
+            verdict = "ASSUMPTIONS_RED"
+        elif rag_counts["AMBER"] > 0:
+            verdict = "ASSUMPTIONS_AMBER"
+        else:
+            verdict = "ASSUMPTIONS_GREEN"
+        _safe_record_decision(
+            input_data={"project_id": project_id},
+            output_data={
+                "total_assumptions": len(scored),
+                "rag_summary": rag_counts,
+            },
+            decision=verdict,
+            action="score_assumption_confidence",
+        )
         return [TextContent(type="text", text=json.dumps({
             "project_id": project_id,
             "total_assumptions": len(scored),
@@ -1153,6 +1207,23 @@ async def _detect_external_drift(arguments: dict) -> list[TextContent]:
         if cascade:
             summary += f" Linked items at risk: {', '.join(cascade)}."
 
+        _safe_record_decision(
+            input_data={
+                "project_id": project_id,
+                "assumption_id": assumption_id,
+                "indicator": indicator,
+                "source": source,
+            },
+            output_data={
+                "severity": severity,
+                "drift_direction": drift_direction,
+                "drift_pct": round(drift_pct, 1) if drift_pct is not None else None,
+                "cascade_count": len(cascade),
+            },
+            decision=f"DRIFT_{severity}",
+            action="detect_external_drift",
+            metadata={"is_boolean": is_boolean},
+        )
         return [TextContent(type="text", text=json.dumps({
             "project_id": project_id,
             "assumption_id": assumption_id,
@@ -1795,6 +1866,29 @@ async def _generate_assumption_report(arguments: dict) -> list[TextContent]:
         # (rejection JSON is returned instead).
         report = _attach_groundedness_to_assumption_report(
             report, assumptions, signals
+        )
+
+        # L8 audit-chain entry — record the executive verdict (RAG
+        # summary counts + cascade-risk verdict) without storing the
+        # full prose body. Recorded BEFORE the L5 guardrail so the
+        # entry exists even if L5 rejects (auditors then see both
+        # "we generated a report" and "L5 blocked it" downstream).
+        summary = report.get("executive_summary") or {}
+        cascade = report.get("cascade_risk") or {}
+        rag_summary = report.get("rag_summary") or {}
+        _safe_record_decision(
+            input_data={"project_id": project_id},
+            output_data={
+                "rag_summary": rag_summary,
+                "cascade_verdict": cascade.get("verdict"),
+                "executive_score": summary.get("overall_score"),
+            },
+            decision=summary.get("overall_rag") or "UNKNOWN",
+            action="generate_assumption_report",
+            metadata={
+                "assumption_count": len(assumptions),
+                "signal_count": len(signals),
+            },
         )
         return _apply_assumption_report_guardrail(report)
 
