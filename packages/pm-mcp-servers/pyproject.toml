@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pm-mcp-servers"
-version = "2.0.0"
+version = "2.1.0"
 description = "126 MCP tools across 18 modules for UK government IPA Gate Review assurance. Risk registers, Monte Carlo simulation, narrative divergence detection, earned value, benefits realisation, lessons learned, gate readiness, calibration evaluation, and escalation routing."
 readme = "README.md"
 license = {text = "MIT"}
@@ -86,6 +86,10 @@ pda-platform-remote = "pm_mcp_servers.pda_platform.remote:main"
 # /dashboards/{name}.uds.yaml so that the platform owns its own
 # dashboards and UDS can load them from any hosted origin.
 "pm_mcp_servers.pm_assumptions" = ["dashboards/*.uds.yaml"]
+# Audit finding P4.F10. Ship the L7 RedTeam corpus alongside the
+# harness so CI and operator-side regression suites can load it
+# without source checkout.
+"pm_mcp_servers._redteam" = ["corpus/*.yaml"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

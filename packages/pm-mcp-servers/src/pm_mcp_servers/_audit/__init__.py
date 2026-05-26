@@ -24,6 +24,14 @@ The public surface is intentionally small:
   the generic :class:`VerificationResult`.
 * :func:`reset_for_testing` — clears in-memory cache and removes the
   on-disk log. Tests use this in a tmp-dir context.
+* :func:`safe_record_decision` — best-effort wrapper used by every
+  MCP server. Catches all exceptions, increments
+  :data:`_FAILURE_COUNTER`, and logs a structured warning. Replaces
+  the per-module ``_safe_record_decision`` + bare-``pass`` pattern
+  identified by audit findings P1.F01, P1.F02, P5.F01.
+* :func:`failure_stats` — snapshot of audit-chain failure counters
+  exposed by the ``/health`` endpoint so operators can detect
+  silent-failure regressions.
 
 The module exposes :data:`AUDIT_DIR` and the lazy chain-cache so test
 code can monkeypatch the directory to a per-test ``tmp_path``.
@@ -32,19 +40,151 @@ code can monkeypatch the directory to a per-test ``tmp_path``.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from pm_data_tools.audit import AuditChain, AuditEntry, VerificationResult
 
+# Audit finding P2.F08 — lock ordering documentation and enforcement.
+#
+# Background. Each MCP module has its own audit chain, each with its
+# own per-module ``threading.Lock`` in :data:`_LOCKS`. A tool that
+# records to two chains in one logical request — say a cross-module
+# workflow that touches `pm_assure` and then `pm_assumptions` — holds
+# the two locks sequentially. If a sibling tool acquires the same two
+# locks in the opposite order, a deadlock is possible under
+# concurrent invocation.
+#
+# Mitigation. Locks must be acquired in **ascending alphabetical
+# module-name order**. The thread-local stack below tracks which
+# modules the current thread holds locks for; ``record_decision``
+# checks the stack before acquiring and warns (not raises — fail-open
+# preserves tool output) if the order is violated. Operators see the
+# warning in production logs and can audit the offending tool.
+_LOCK_ORDER_STATE = threading.local()
+
+
+def _lock_stack() -> list[str]:
+    if not hasattr(_LOCK_ORDER_STATE, "stack"):
+        _LOCK_ORDER_STATE.stack = []
+    return _LOCK_ORDER_STATE.stack
+
 __all__ = [
     "AUDIT_DIR",
     "record_decision",
     "verify_chain",
     "reset_for_testing",
+    "safe_record_decision",
+    "failure_stats",
+    "reset_failure_stats",
+    "rotate_if_needed",
+    "chain_sizes",
+    "ROTATION_SIZE_BYTES",
 ]
+
+logger = logging.getLogger(__name__)
+
+
+# Audit finding P5.F04. The on-disk JSONL files grew without bound,
+# making process restart slow and a disk-full failure mode invisible
+# to the operator. The rotation policy below is size-driven (not time
+# driven — simpler, deterministic, and matches the audit's "expose
+# size metric" recommendation). When the current file passes the
+# threshold, it is renamed to the next free numbered archive
+# (e.g. ``pm_assure.jsonl.1``, ``.2``, ...). The in-memory chain is
+# untouched — every entry that has been recorded since process start
+# remains in the cache — so the hash chain continues unbroken from
+# the next write.
+#
+# Hydration on a fresh process reads archives in numeric order, then
+# the current file, so the recovered chain matches the live one.
+ROTATION_SIZE_BYTES = int(
+    os.environ.get("PDA_AUDIT_ROTATION_SIZE_BYTES", str(10 * 1024 * 1024))
+)
+
+
+def _archive_path(module_name: str, index: int) -> Path:
+    return AUDIT_DIR / f"{module_name}.jsonl.{index}"
+
+
+def _next_archive_index(module_name: str) -> int:
+    """Find the next free archive index for ``module_name``."""
+    index = 1
+    while _archive_path(module_name, index).exists():
+        index += 1
+    return index
+
+
+def rotate_if_needed(module_name: str) -> Path | None:
+    """Rotate ``<module>.jsonl`` if it exceeds the size threshold.
+
+    Returns the new archive path on rotation, otherwise ``None``. Safe
+    to call before every write — the size check is a single ``stat()``.
+    """
+    log_path = _log_path(module_name)
+    if not log_path.exists():
+        return None
+    try:
+        size = log_path.stat().st_size
+    except OSError:
+        return None
+    if size < ROTATION_SIZE_BYTES:
+        return None
+    archive = _archive_path(module_name, _next_archive_index(module_name))
+    try:
+        log_path.rename(archive)
+    except OSError as exc:
+        logger.warning(
+            "audit_chain_rotation_failed",
+            extra={
+                "audit_module": module_name,
+                "size_bytes": size,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+        return None
+    logger.info(
+        "audit_chain_rotated",
+        extra={
+            "audit_module": module_name,
+            "archive": str(archive),
+            "size_bytes": size,
+        },
+    )
+    return archive
+
+
+def chain_sizes() -> dict[str, int]:
+    """Return current + archive byte sizes per module.
+
+    Exposed via ``/health`` so operators can see audit chain growth
+    without parsing JSONL files. Returns ``{}`` if the audit
+    directory does not exist.
+    """
+    sizes: dict[str, int] = {}
+    if not AUDIT_DIR.exists():
+        return sizes
+    for path in AUDIT_DIR.iterdir():
+        if not path.is_file():
+            continue
+        # Match ``<module>.jsonl`` and ``<module>.jsonl.<n>``.
+        name = path.name
+        if name.endswith(".jsonl"):
+            module_name = name[: -len(".jsonl")]
+        elif ".jsonl." in name:
+            module_name = name.split(".jsonl.")[0]
+        else:
+            continue
+        try:
+            sizes[module_name] = sizes.get(module_name, 0) + path.stat().st_size
+        except OSError:
+            continue
+    return sizes
 
 
 def _default_audit_dir() -> Path:
@@ -89,13 +229,44 @@ def _log_path(module_name: str) -> Path:
 
 
 def _hydrate_chain(module_name: str) -> AuditChain:
-    """Load existing entries from disk and rebuild the in-memory chain."""
-    log_path = _log_path(module_name)
+    """Load existing entries from disk and rebuild the in-memory chain.
+
+    Reads numbered archives in order (``<module>.jsonl.1`` …
+    ``<module>.jsonl.N``) followed by the current ``<module>.jsonl``
+    so the recovered chain matches the write-order across rotations
+    (audit finding P5.F04).
+    """
     signing_key = _signing_key()
-    if not log_path.exists():
-        return AuditChain(signing_key=signing_key)
     entries: list[dict[str, Any]] = []
-    with open(log_path, encoding="utf-8") as f:
+
+    # Archives are written in ascending order of rotation: index 1
+    # is the oldest. Hydration reads them in that order so the
+    # rebuilt chain matches the original sequence.
+    index = 1
+    while True:
+        archive = _archive_path(module_name, index)
+        if not archive.exists():
+            break
+        _read_jsonl_into(archive, entries)
+        index += 1
+
+    log_path = _log_path(module_name)
+    if log_path.exists():
+        _read_jsonl_into(log_path, entries)
+
+    if not entries:
+        return AuditChain(signing_key=signing_key)
+    return AuditChain.from_json(json.dumps(entries), signing_key=signing_key)
+
+
+def _read_jsonl_into(path: Path, entries: list[dict[str, Any]]) -> None:
+    """Append JSON-decodable lines from ``path`` to ``entries``.
+
+    Malformed lines are skipped; ``verify_chain`` surfaces them when
+    called rather than crashing hydration (audit finding P3.F03 also
+    leans on this resilience).
+    """
+    with open(path, encoding="utf-8") as f:
         for raw in f:
             raw = raw.strip()
             if not raw:
@@ -103,10 +274,7 @@ def _hydrate_chain(module_name: str) -> AuditChain:
             try:
                 entries.append(json.loads(raw))
             except ValueError:
-                # Skip corrupted line — verify_chain will report it
-                # when called, rather than crashing during hydration.
                 continue
-    return AuditChain.from_json(json.dumps(entries), signing_key=signing_key)
 
 
 def _get_chain(module_name: str) -> tuple[AuditChain, Lock, Path]:
@@ -156,17 +324,220 @@ def record_decision(
     tool execution to continue should wrap this call in ``try/except``.
     """
     chain, lock, log_path = _get_chain(module_name)
-    with lock:
-        entry = chain.record(
+
+    # Audit finding P2.F08. Enforce ascending alphabetical lock
+    # ordering across modules. The check is best-effort: a violation
+    # logs a warning so operators can audit the offending tool but
+    # does not raise, preserving the platform's "audit failures must
+    # not break tool output" property.
+    stack = _lock_stack()
+    if stack and module_name <= stack[-1]:
+        logger.warning(
+            "audit_lock_order_violation",
+            extra={
+                "audit_module": module_name,
+                "currently_held": list(stack),
+                "advisory": (
+                    "Modules' audit-chain locks must be acquired in "
+                    "ascending alphabetical order to avoid deadlock. "
+                    "Refactor the calling tool."
+                ),
+            },
+        )
+    stack.append(module_name)
+
+    try:
+        with lock:
+            # Audit finding P5.F04 — rotate before write so the new entry
+            # always lands in a sub-threshold file. Rotation is best-effort
+            # (size check + rename); failure to rotate falls through to a
+            # normal write so an unwritable archive name never blocks
+            # tool output.
+            rotate_if_needed(module_name)
+            entry = chain.record(
+                input_data=input_data,
+                output_data=output_data,
+                decision=decision,
+                action=action,
+                metadata=metadata or {},
+            )
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry.to_dict(), default=str) + "\n")
+            return entry
+    finally:
+        # Audit finding P2.F08 — release the lock-order tracking even
+        # if record() raised. Mismatched pop is defensive: a refactor
+        # that broke append/pop pairing would not corrupt the stack.
+        if stack and stack[-1] == module_name:
+            stack.pop()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Best-effort wrapper + failure-counter telemetry
+# ──────────────────────────────────────────────────────────────────────
+# Audit findings P1.F01, P1.F02 (silent swallow), P5.F01 (no operator
+# visibility) all reduce to the same underlying problem: every MCP
+# module wrapped `record_decision` in a bare `try/except: pass`, so a
+# disk-full, permissions, or schema-mismatch error was invisible to
+# the operator. The wrapper below replaces that pattern.
+#
+# Behaviour change vs the per-module wrappers:
+#   - exceptions are still caught (tool output must not break);
+#   - a structured warning is logged with the module + decision name;
+#   - a per-module failure counter is incremented for `/health` to
+#     expose. Operators can now alert on "audit failures > 0" without
+#     parsing logs.
+
+_FAILURE_COUNTER: dict[str, int] = {}
+_FAILURE_COUNTER_LOCK = Lock()
+
+
+def safe_record_decision(
+    module_name: str,
+    *,
+    input_data: Any,
+    output_data: Any,
+    decision: str,
+    action: str,
+    metadata: dict[str, Any] | None = None,
+) -> AuditEntry | None:
+    """Best-effort audit-chain record. Logs and counts on failure.
+
+    Replaces the per-module ``_safe_record_decision`` + bare ``pass``
+    pattern flagged in audit findings P1.F01 / P1.F02 / P5.F01.
+
+    On success returns the recorded :class:`AuditEntry`. On failure
+    returns ``None`` after logging a warning and incrementing the
+    module-scoped failure counter exposed via :func:`failure_stats`.
+    """
+    try:
+        return record_decision(
+            module_name,
             input_data=input_data,
             output_data=output_data,
             decision=decision,
             action=action,
-            metadata=metadata or {},
+            metadata=metadata,
         )
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry.to_dict(), default=str) + "\n")
-        return entry
+    except Exception as exc:
+        with _FAILURE_COUNTER_LOCK:
+            _FAILURE_COUNTER[module_name] = (
+                _FAILURE_COUNTER.get(module_name, 0) + 1
+            )
+        logger.warning(
+            "audit_chain_record_failed",
+            extra={
+                # NB: "module" is a reserved LogRecord attribute name;
+                # use "audit_module" so structlog/json log handlers do
+                # not raise a KeyError on emission.
+                "audit_module": module_name,
+                "action": action,
+                "decision": decision,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+        return None
+
+
+def failure_stats() -> dict[str, int]:
+    """Return a snapshot of audit-chain failure counters per module.
+
+    Exposed via the ``/health`` endpoint so operators can detect
+    silent audit-chain failures without parsing logs.
+    """
+    with _FAILURE_COUNTER_LOCK:
+        return dict(_FAILURE_COUNTER)
+
+
+def reset_failure_stats() -> None:
+    """Reset the failure counter (test helper)."""
+    with _FAILURE_COUNTER_LOCK:
+        _FAILURE_COUNTER.clear()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Best-effort wrapper + failure-counter telemetry
+# ──────────────────────────────────────────────────────────────────────
+# Audit findings P1.F01, P1.F02 (silent swallow), P5.F01 (no operator
+# visibility) all reduce to the same underlying problem: every MCP
+# module wrapped `record_decision` in a bare `try/except: pass`, so a
+# disk-full, permissions, or schema-mismatch error was invisible to
+# the operator. The wrapper below replaces that pattern.
+#
+# Behaviour change vs the per-module wrappers:
+#   - exceptions are still caught (tool output must not break);
+#   - a structured warning is logged with the module + decision name;
+#   - a per-module failure counter is incremented for `/health` to
+#     expose. Operators can now alert on "audit failures > 0" without
+#     parsing logs.
+
+_FAILURE_COUNTER: dict[str, int] = {}
+_FAILURE_COUNTER_LOCK = Lock()
+
+
+def safe_record_decision(
+    module_name: str,
+    *,
+    input_data: Any,
+    output_data: Any,
+    decision: str,
+    action: str,
+    metadata: dict[str, Any] | None = None,
+) -> AuditEntry | None:
+    """Best-effort audit-chain record. Logs and counts on failure.
+
+    Replaces the per-module ``_safe_record_decision`` + bare ``pass``
+    pattern flagged in audit findings P1.F01 / P1.F02 / P5.F01.
+
+    On success returns the recorded :class:`AuditEntry`. On failure
+    returns ``None`` after logging a warning and incrementing the
+    module-scoped failure counter exposed via :func:`failure_stats`.
+    """
+    try:
+        return record_decision(
+            module_name,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        with _FAILURE_COUNTER_LOCK:
+            _FAILURE_COUNTER[module_name] = (
+                _FAILURE_COUNTER.get(module_name, 0) + 1
+            )
+        logger.warning(
+            "audit_chain_record_failed",
+            extra={
+                # NB: "module" is a reserved LogRecord attribute name;
+                # use "audit_module" so structlog/json log handlers do
+                # not raise a KeyError on emission.
+                "audit_module": module_name,
+                "action": action,
+                "decision": decision,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+        return None
+
+
+def failure_stats() -> dict[str, int]:
+    """Return a snapshot of audit-chain failure counters per module.
+
+    Exposed via the ``/health`` endpoint so operators can detect
+    silent audit-chain failures without parsing logs.
+    """
+    with _FAILURE_COUNTER_LOCK:
+        return dict(_FAILURE_COUNTER)
+
+
+def reset_failure_stats() -> None:
+    """Reset the failure counter (test helper)."""
+    with _FAILURE_COUNTER_LOCK:
+        _FAILURE_COUNTER.clear()
 
 
 def verify_chain(module_name: str) -> VerificationResult:

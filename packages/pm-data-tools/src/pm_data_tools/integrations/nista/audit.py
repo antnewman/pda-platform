@@ -22,7 +22,7 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -141,7 +141,7 @@ class AuditLogger:
         report_dump = report.model_dump() if hasattr(report, "model_dump") else report
 
         entry = AuditEntry(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             action="GMPP_SUBMISSION",
             user=self._get_current_user(),
             project_id=project_id,
@@ -177,7 +177,7 @@ class AuditLogger:
             The created :class:`AuditEntry`.
         """
         entry = AuditEntry(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             action=action,
             user=self._get_current_user(),
             project_id=project_id,

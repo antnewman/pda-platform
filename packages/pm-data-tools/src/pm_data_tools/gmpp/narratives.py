@@ -12,7 +12,7 @@ first :class:`NarrativeGenerator` instantiation so that simply importing
 ``pm_data_tools.gmpp`` (which the unified server does) stays cheap.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pm_data_tools.gmpp.models import DCANarrative, ReviewLevel
 
@@ -478,7 +478,7 @@ risks closed or newly identified this quarter. Use professional civil service st
             text=result.consensus.get("narrative_text", "[Generation failed]"),
             confidence=result.confidence,
             review_level=ReviewLevel(review_level),
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             samples_used=result.samples_used,
             review_reason=review_reason,
         )

@@ -72,8 +72,20 @@ ASSUMPTION_DRIFT_PROMPT.md
 
 # Local gap-analysis build artefacts
 build_gap_analysis_docx.js
+build_gap_analysis_v2_docx.js
 verified-autonomy.txt
 .claude/scheduled_tasks.lock
+
+# Node modules installed locally for DOCX build scripts.
+# The committed build_multipass_audit_docx.js pulls these in via
+# `npm install docx`; the dependency tree is transient.
+node_modules/
+
+# Audit working files — superseded by docs/audits/*.md once an audit
+# cycle completes. Listed here so the next cycle's prep doesn't
+# accidentally commit working extracts.
+v*_audit_extract.md
+v*_audit.md
 
 # Office temp files
 ~$*

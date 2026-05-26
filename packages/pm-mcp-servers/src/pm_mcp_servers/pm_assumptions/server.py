@@ -22,14 +22,14 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any
 
 from mcp.types import TextContent, Tool
 
 from pm_data_tools.db.store import AssuranceStore
-from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._audit import record_decision, safe_record_decision
 from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._quality import derive_quality_from_groundedness
 
@@ -53,18 +53,16 @@ def _safe_record_decision(
     action: str,
     metadata: dict | None = None,
 ) -> None:
-    """Best-effort audit-chain record. Never raises."""
-    try:
-        record_decision(
-            _AUDIT_MODULE,
-            input_data=input_data,
-            output_data=output_data,
-            decision=decision,
-            action=action,
-            metadata=metadata,
-        )
-    except Exception:
-        pass
+    """Best-effort audit-chain record. Logs and counts on failure
+    (audit findings P1.F01 / P1.F02 / P5.F01)."""
+    safe_record_decision(
+        _AUDIT_MODULE,
+        input_data=input_data,
+        output_data=output_data,
+        decision=decision,
+        action=action,
+        metadata=metadata,
+    )
 from pm_mcp_servers._guardrails import (
     Severity,
     Verdict,
@@ -1312,7 +1310,7 @@ def build_assumption_dashboard_panels(
 
     return {
         "project_id": project_id,
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
         "summary": {
             "total_assumptions": len(assumptions),
             "stale_count": stale_count,
@@ -1488,7 +1486,7 @@ async def _export_assumption_graph(arguments: dict) -> list[TextContent]:
         if fmt in ("all", "json"):
             graph_data = {
                 "project_id": project_id,
-                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "generated_at": datetime.now(timezone.utc).isoformat() + "Z",
                 "node_count": len(nodes),
                 "edge_count": len(edges),
                 "nodes": nodes,
@@ -1502,7 +1500,7 @@ async def _export_assumption_graph(arguments: dict) -> list[TextContent]:
         if fmt in ("all", "cypher"):
             lines = [
                 "// PDA Platform — Assumption Dependency Graph",
-                f"// Project: {project_id}  Generated: {datetime.utcnow().date()}",
+                f"// Project: {project_id}  Generated: {datetime.now(timezone.utc).date()}",
                 "// Load with: cypher-shell -f graph.cypher  or paste into Neo4j Browser",
                 "",
                 "// Clear existing data for this project (optional)",

@@ -52,6 +52,10 @@ from pm_mcp_servers._redteam.harness import (
     Report,
     TestCase,
 )
+from pm_mcp_servers._redteam.corpus_loader import (
+    DEFAULT_CORPUS_PATH,
+    load_corpus,
+)
 
 __all__ = [
     "Finding",
@@ -60,4 +64,6 @@ __all__ = [
     "RedTeamHarness",
     "Report",
     "TestCase",
+    "DEFAULT_CORPUS_PATH",
+    "load_corpus",
 ]

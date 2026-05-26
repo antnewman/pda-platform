@@ -29,7 +29,7 @@ docs/                    Practitioner guides and technical references
 
 ## Package Versions — Keep in Sync
 
-All four packages are versioned together. Current version: **2.0.0**
+All four packages are versioned together. Current version: **2.1.0**
 
 | Package | PyPI | pyproject.toml location |
 |---|---|---|
@@ -153,6 +153,23 @@ Current documentation status (update this when docs are written):
 | pm-lessons | ✅ | ✅ v2.2 | ✅ | partial |
 | pm-reporting | ✅ | ✅ v2.2 | n/a | partial |
 | pm-assumptions | n/a | ✅ v2.2 | n/a | partial |
+
+### Internal modules (no MCP tools; dispatch-seam + cross-cutting infrastructure)
+
+These ship inside `pm-mcp-servers` but expose no MCP tools. Doc duty
+is lighter: a docstring + a CHANGELOG note + a reference from the
+audit finding that motivated the module. Listed here so future
+audits don't flag them as undocumented.
+
+| Module | Docstring | CHANGELOG entry | Audit-finding reference | Notes |
+|---|---|---|---|---|
+| `_validation` (2.1.0) | ✅ | ✅ 2.1.0 | P4.F01, P4.F03, P5.F05 | Dispatch-layer input sanitisation + canonical error envelope. No user-facing surface. |
+| `_redteam/corpus` (2.1.0) | ✅ corpus_loader.py | ✅ 2.1.0 | P4.F10, P6.F12 | YAML data + loader for the L7 harness. Expand `v2.yaml` etc. in future cycles. |
+| `_audit` (2.0.0) | ✅ | ✅ 2.1.0 (rotation/counter) | P1.F01, P1.F02, P5.F01, P5.F04, P2.F08, P3.F03 | Per-module audit chain wrapper around `pm_data_tools.audit.AuditChain`. |
+| `_guardrails` (2.0.0) | ✅ | ✅ 2.1.0 (L5 fail-safe) | P3.F07, P3.F11, P4.F05 | L5 deterministic guardrail engine + wrapper + rule builders. |
+| `_groundedness` (2.0.0) | ✅ | — | — | L6 token-overlap groundedness checker. |
+| `_quality` (2.0.0) | ✅ | — | — | L6 quality classification from groundedness. |
+| `_redteam/harness.py` (2.0.0) | ✅ | — | — | L7 harness primitive (no corpus shipped until 2.1.0). |
 
 ## Adding a New MCP Module
 

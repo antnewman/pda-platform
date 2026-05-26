@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 import structlog
@@ -32,6 +33,46 @@ import structlog
 logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
 DEFAULT_DB_PATH: Path = Path.home() / ".pm_data_tools" / "store.db"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Process-level store cache (audit finding P2.F03)
+# ──────────────────────────────────────────────────────────────────────
+# Each tool call previously re-instantiated `AssuranceStore`, which
+# re-ran the full schema-initialisation script over and over. Under
+# concurrent load this also opened transient SQLite connections at a
+# rate well above the per-process FD limit. The cache below memoises
+# the wrapper keyed by resolved db_path so `_initialise()` runs at most
+# once per process per database; per-call code paths still open and
+# close their own short-lived connections inside `with`-blocks.
+
+_STORE_CACHE: dict[str, "AssuranceStore"] = {}
+_STORE_CACHE_LOCK = threading.Lock()
+
+
+def get_store(db_path: Path | str | None = None) -> "AssuranceStore":
+    """Return a process-level cached :class:`AssuranceStore`.
+
+    Cached by resolved absolute path; ``None`` resolves to
+    :data:`DEFAULT_DB_PATH`. Tests that want isolation should keep
+    calling ``AssuranceStore(db_path=...)`` with a unique tmp_path.
+
+    Thread-safe: the cache is guarded by a module-level lock.
+    """
+    resolved = Path(db_path) if db_path else DEFAULT_DB_PATH
+    key = str(resolved.resolve()) if resolved.parent.exists() else str(resolved)
+    with _STORE_CACHE_LOCK:
+        cached = _STORE_CACHE.get(key)
+        if cached is None:
+            cached = AssuranceStore(db_path=resolved)
+            _STORE_CACHE[key] = cached
+        return cached
+
+
+def _reset_store_cache_for_testing() -> None:
+    """Clear the cached stores (test helper)."""
+    with _STORE_CACHE_LOCK:
+        _STORE_CACHE.clear()
 
 
 class AssuranceStore:
@@ -74,13 +115,35 @@ class AssuranceStore:
     # ------------------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a connection with row-factory set.
+        """Open a connection with hardening pragmas applied.
+
+        Pragmas (audit findings P2.F02, P3.F01):
+
+        * ``journal_mode=WAL`` — multiple readers do not block a writer
+          and a writer no longer blocks readers. Required before any
+          deployment runs more than one worker; cheap on a single
+          worker. Persisted in the database header — only needs to be
+          set once but we set it on every open so a fresh DB inherits
+          it.
+        * ``busy_timeout=5000`` — when a competing writer holds a lock,
+          wait up to 5 seconds before raising ``OperationalError``
+          (default is to fail immediately).
+        * ``synchronous=NORMAL`` — pairs with WAL; durable enough for
+          assurance records, much faster than ``FULL``.
+        * ``foreign_keys=ON`` — SQLite declares foreign keys but does
+          not enforce them by default. Without this PRAGMA, an
+          ``ON DELETE CASCADE`` clause is silently inert. Must be set
+          per connection.
 
         Returns:
             A configured :class:`sqlite3.Connection`.
         """
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
         return conn
 
     def _initialise(self) -> None:
@@ -1025,9 +1088,29 @@ class AssuranceStore:
     # ------------------------------------------------------------------
     # Lessons learned (P7)
     # ------------------------------------------------------------------
+    #
+    # Audit finding P3.F02. Two overlapping tables exist:
+    #
+    # * ``lessons_learned`` — the older 14-column table written by
+    #   ``upsert_lesson`` (this method). Carries the original P7
+    #   columns: title, description, sentiment, project_phase, etc.
+    # * ``lessons`` — the newer 13-column table written by
+    #   ``upsert_project_lesson`` (further below). Used by the
+    #   pm-lessons MCP module's AI-extraction pipeline.
+    #
+    # The two tables are not mirrored, do not share an id column, and
+    # have different uniqueness semantics. Callers must choose the
+    # table that matches their writer; cross-reading is silent data
+    # loss. A future migration should consolidate to ``lessons``;
+    # until then, this comment is the contract. The same warning lives
+    # on ``upsert_project_lesson`` below so a developer reading either
+    # site sees it.
 
     def upsert_lesson(self, data: dict[str, object]) -> None:
-        """Insert or replace a lessons learned record.
+        """Insert or replace a lessons learned record into ``lessons_learned``.
+
+        See the audit-finding-P3.F02 banner above for why this method
+        writes to ``lessons_learned`` and not ``lessons``.
 
         Args:
             data: Dict with keys matching the ``lessons_learned`` table
@@ -2779,9 +2862,18 @@ class AssuranceStore:
     # ------------------------------------------------------------------
     # Lessons (pm-lessons module)
     # ------------------------------------------------------------------
+    #
+    # Audit finding P3.F02 (continued). This method writes to the
+    # newer ``lessons`` table; the older ``upsert_lesson`` writes to
+    # ``lessons_learned``. See the banner above ``upsert_lesson`` for
+    # the full rationale and migration disposition.
 
     def upsert_project_lesson(self, lesson: dict) -> str:
-        """Insert or replace a lesson record.
+        """Insert or replace a lesson record into ``lessons``.
+
+        See the audit-finding-P3.F02 banner above ``upsert_lesson``
+        for why this method writes to ``lessons`` and not
+        ``lessons_learned``.
 
         Args:
             lesson: Dict with keys matching the ``lessons`` table columns.

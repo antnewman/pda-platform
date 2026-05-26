@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -328,7 +328,7 @@ async def _set_financial_baseline(arguments: dict[str, Any]) -> list[TextContent
             "period_budget": arguments.get("period_budget"),
             "currency": currency,
             "notes": arguments.get("notes"),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         store.upsert_financial_baseline(data)
@@ -382,7 +382,7 @@ async def _log_financial_actuals(arguments: dict[str, Any]) -> list[TextContent]
             "committed_spend": committed_spend,
             "source": arguments.get("source"),
             "notes": arguments.get("notes"),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         store.upsert_financial_actual(data)
@@ -626,7 +626,7 @@ async def _log_cost_forecast(arguments: dict[str, Any]) -> list[TextContent]:
             "confidence_pct": confidence_pct,
             "p80_estimate": p80_estimate,
             "notes": arguments.get("notes"),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
         store.upsert_financial_forecast(data)

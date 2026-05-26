@@ -27,12 +27,33 @@ Total: 126 tools accessible through one connection.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from typing import Any
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
+
+from .._validation import (
+    ValidationError,
+    error_envelope,
+    sanitise_arguments,
+    validate_payload_size,
+)
+
+# Audit finding P4.F07. jsonschema is a transitive dependency of `mcp`
+# and is already available on the platform. Importing it here lets the
+# dispatcher validate inbound arguments against the per-tool
+# `inputSchema` so malformed inputs are rejected with a clean envelope
+# rather than crashing the owning handler with a TypeError.
+try:
+    import jsonschema as _jsonschema  # type: ignore[import]
+    from jsonschema import ValidationError as _JsonSchemaValidationError  # type: ignore[import]
+except ImportError:  # pragma: no cover - defensive
+    _jsonschema = None
+    _JsonSchemaValidationError = Exception  # type: ignore[assignment]
 
 from ..pm_analyse.registry import TOOLS as ANALYSE_TOOLS
 from ..pm_analyse.registry import dispatch as analyse_dispatch
@@ -108,6 +129,12 @@ ALL_TOOLS: list[Tool] = (
     + SIMULATION_TOOLS + LESSONS_TOOLS + REPORTING_TOOLS + ASSUMPTIONS_TOOLS
 )
 
+# Audit finding P4.F07. Build a name → inputSchema lookup once at
+# import time so per-call schema validation in `call_tool` is O(1).
+_TOOL_SCHEMA: dict[str, dict[str, Any]] = {
+    tool.name: tool.inputSchema for tool in ALL_TOOLS if tool.inputSchema
+}
+
 logger.info(
     "PDA Platform unified server: %d tools from %d modules",
     len(ALL_TOOLS),
@@ -123,11 +150,111 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: Any) -> list[TextContent]:
-    """Route tool call to the owning module's dispatcher."""
+    """Route tool call to the owning module's dispatcher.
+
+    Performs three audit-finding mitigations at the single dispatch
+    seam every MCP call funnels through:
+
+    * **P4.F03 — input size limits.** :func:`validate_payload_size`
+      rejects any payload larger than 1 MiB before it can fan out to
+      LLM calls or downstream stores.
+    * **P4.F01 — identifier sanitisation.**
+      :func:`sanitise_arguments` rejects ``project_id`` (and other
+      identifier-shaped fields) that contain newlines, prompt
+      escape sequences, or other prompt-injection material before
+      they reach Claude.
+    * **P5.F03 — per-invocation logging.** Every tool call now emits
+      a structured INFO log line with tool name, elapsed ms, and
+      success/failure outcome so operators can reconstruct what ran
+      from production logs.
+    """
+    project_id_for_log = (
+        arguments.get("project_id") if isinstance(arguments, dict) else None
+    )
+    started_at = time.monotonic()
+    try:
+        validate_payload_size(arguments)
+        if isinstance(arguments, dict):
+            sanitise_arguments(arguments)
+            # Audit finding P4.F07. After cheap sanitisation, validate
+            # against the per-tool declared inputSchema so malformed
+            # inputs (wrong types, missing required fields) are
+            # rejected with a clean envelope rather than crashing
+            # the handler with a TypeError.
+            schema = _TOOL_SCHEMA.get(name)
+            if schema and _jsonschema is not None:
+                try:
+                    _jsonschema.validate(arguments, schema)
+                except _JsonSchemaValidationError as schema_exc:
+                    raise ValidationError(
+                        f"Input does not match tool schema: {schema_exc.message}",
+                        field=".".join(str(p) for p in schema_exc.absolute_path) or None,
+                    ) from schema_exc
+    except ValidationError as exc:
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.warning(
+            "tool_call_rejected",
+            extra={
+                "tool": name,
+                "project_id": project_id_for_log,
+                "field": exc.field,
+                "reason": str(exc),
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        # The canonical envelope shape (audit finding P5.F05) is
+        # offered alongside the existing top-level keys so consumers
+        # can migrate incrementally. Existing keys remain unchanged.
+        envelope = error_envelope(
+            code="validation_rejected",
+            message=str(exc),
+            context={"field": exc.field, "tool": name},
+        )
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "validation_rejected",
+                        "field": exc.field,
+                        "reason": str(exc),
+                        "_envelope": envelope["error"],
+                    }
+                ),
+            )
+        ]
+
     dispatch_fn = _TOOL_DISPATCH.get(name)
     if dispatch_fn is None:
+        logger.warning(
+            "tool_call_unknown",
+            extra={"tool": name, "project_id": project_id_for_log},
+        )
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
-    return await dispatch_fn(name, arguments)
+
+    try:
+        result = await dispatch_fn(name, arguments)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            "tool_call_ok",
+            extra={
+                "tool": name,
+                "project_id": project_id_for_log,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        return result
+    except Exception:
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.exception(
+            "tool_call_failed",
+            extra={
+                "tool": name,
+                "project_id": project_id_for_log,
+                "elapsed_ms": elapsed_ms,
+            },
+        )
+        raise
 
 
 async def _run() -> None:
