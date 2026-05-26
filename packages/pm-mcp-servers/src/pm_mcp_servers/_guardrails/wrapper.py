@@ -143,10 +143,18 @@ def _try_parse_json_object(item: TextContent) -> dict[str, Any] | None:
     return None
 
 
+# Audit finding P3.F11. The rejection envelope is a public contract
+# between the platform and any consumer that parses tool errors. Tag
+# every payload with a schema_version so future structural changes can
+# advertise compatibility breaks; consumers can branch on the value.
+REJECTION_ENVELOPE_SCHEMA_VERSION = 1
+
+
 def _rejection_payload(result: EvaluationResult) -> dict[str, Any]:
     """Build the structured-error response that replaces a REJECTED output."""
     return {
         "error": "guardrail_rejected",
+        "schema_version": REJECTION_ENVELOPE_SCHEMA_VERSION,
         "verdict": result.verdict.value,
         "message": (
             "Output rejected by deterministic guardrail policy. "

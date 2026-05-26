@@ -213,8 +213,14 @@ KNOWLEDGE_TOOLS: list[Tool] = [
                 },
                 "estimate_type": {
                     "type": "string",
-                    "enum": ["cost_overrun", "schedule_slip"],
-                    "description": "What is being estimated: cost_overrun (% above approved baseline) or schedule_slip (months beyond planned completion).",
+                    # The canonical values are "cost_overrun" and "schedule_slip".
+                    # The aliases "cost" and "schedule" are accepted by the
+                    # handler (see _REFERENCE_CLASS_ALIASES) so they must
+                    # appear in the enum too — otherwise the dispatch-layer
+                    # JSON-schema validator added for audit finding P4.F07
+                    # would reject the alias before the handler resolves it.
+                    "enum": ["cost_overrun", "schedule_slip", "cost", "schedule"],
+                    "description": "What is being estimated: cost_overrun (% above approved baseline) or schedule_slip (months beyond planned completion). Aliases 'cost' and 'schedule' are accepted.",
                 },
                 "submitted_value": {
                     "type": "number",

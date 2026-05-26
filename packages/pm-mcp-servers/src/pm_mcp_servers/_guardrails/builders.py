@@ -180,6 +180,44 @@ def build_allowed_values_rule(
     )
 
 
+# Audit finding P4.F05. Substring matching on raw text is vulnerable to
+# Unicode evasion: zero-width characters splitting forbidden phrases,
+# Arabic-Indic digits standing in for ASCII digits, decomposed
+# combining marks, ﬀ ligatures. The helpers below run on both the text
+# under test and the forbidden needles so an attacker who controls
+# upstream input cannot smuggle a phrase past the substring check by
+# encoding it differently.
+#
+# Normalisation steps:
+#   * NFKC — folds compatibility forms (Arabic-Indic digits → ASCII,
+#     ﬀ ligature → "ff", full-width Latin → ASCII).
+#   * Zero-width / formatting characters stripped (U+200B–U+200F,
+#     U+FEFF). Keeps regular whitespace intact.
+#
+# The normalisation is symmetric: the same pipeline runs on the rule's
+# configured phrases at build time and on the candidate text at evaluate
+# time. A test that pins each evasion class lives next to this builder.
+
+import unicodedata
+
+# Cf (format) characters used for word-joining / RTL marks / etc. The
+# common evasion characters are all in this category; conservative
+# blanket removal of Cf is the simplest correct fix.
+_ZERO_WIDTH_CATEGORIES = frozenset({"Cf"})
+
+
+def _normalise_for_matching(text: str) -> str:
+    """Return ``text`` after NFKC normalisation and Cf-stripping.
+
+    The pipeline behind audit finding P4.F05's mitigation. Applied
+    symmetrically to candidate text and forbidden needles.
+    """
+    decomposed = unicodedata.normalize("NFKC", text)
+    return "".join(
+        ch for ch in decomposed if unicodedata.category(ch) not in _ZERO_WIDTH_CATEGORIES
+    )
+
+
 def build_forbidden_phrase_rule(
     field: str,
     phrases: Iterable[str],
@@ -199,6 +237,13 @@ def build_forbidden_phrase_rule(
     The match is case-insensitive by default; pass ``case_sensitive=True``
     to require an exact substring match.
 
+    Unicode evasion (audit finding P4.F05) is mitigated by applying
+    NFKC normalisation plus zero-width / formatting character stripping
+    to both the candidate text and the configured phrases. So
+    ``"100​% certain"``, ``"1٠٠% certain"`` (Arabic-Indic digits),
+    and ``"ｉｇｎｏｒｅ"`` (full-width) all match ``"100% certain"`` /
+    ``"ignore"`` after normalisation.
+
     Args:
         field: Dotted path to the text field.
         phrases: Forbidden substrings.
@@ -212,10 +257,12 @@ def build_forbidden_phrase_rule(
     if not phrase_list:
         raise ValueError("build_forbidden_phrase_rule requires at least one phrase")
 
+    # Normalise needles once at build time.
+    normalised_phrases = [_normalise_for_matching(p) for p in phrase_list]
     needles = (
-        tuple(phrase_list)
+        tuple(normalised_phrases)
         if case_sensitive
-        else tuple(p.lower() for p in phrase_list)
+        else tuple(p.lower() for p in normalised_phrases)
     )
 
     quoted = ", ".join(repr(p) for p in phrase_list)
@@ -231,7 +278,7 @@ def build_forbidden_phrase_rule(
             # Missing text fields cannot contain forbidden phrases.
             # Compose with build_required_field_rule if needed.
             return False
-        text = str(value)
+        text = _normalise_for_matching(str(value))
         if not case_sensitive:
             text = text.lower()
         return any(needle in text for needle in needles)

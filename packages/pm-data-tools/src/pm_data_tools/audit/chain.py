@@ -92,6 +92,27 @@ def compute_consistency_hash(decision: dict[str, Any]) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+# Audit finding P3.F03. The current schema for an :class:`AuditEntry`
+# carries no version marker. If a future PR adds a required field, old
+# chains deserialised from disk lack it and verification silently
+# changes shape. Adding a version field is the standard fix, but it
+# must not break verification of pre-existing chains — entries written
+# without the field already have a stored ``entry_hash`` computed
+# over the older payload shape. The implementation keeps backward
+# compatibility by:
+#
+#   * marking new entries with ``schema_version = 1``;
+#   * keeping ``schema_version = None`` for entries hydrated from disk
+#     that lack the field (these are de-facto "v0");
+#   * excluding ``schema_version`` from the hash payload when its value
+#     is ``None`` — so a v0 entry rehashes to the same digest it had
+#     when written.
+#
+# A bump beyond v1 in the future would add a ``from_dict`` branch on
+# the value rather than mutating this class in place.
+AUDIT_ENTRY_SCHEMA_VERSION = 1
+
+
 @dataclass
 class AuditEntry:
     """Immutable audit log entry. One per decision.
@@ -109,6 +130,13 @@ class AuditEntry:
     ``entry_hash`` and ``previous_entry_hash`` form the tamper-evident
     chain. They are populated by :meth:`AuditChain.record`; consumers
     should not set them by hand.
+
+    ``schema_version`` flags the entry shape (audit finding P3.F03).
+    Entries written by the current code default to
+    :data:`AUDIT_ENTRY_SCHEMA_VERSION`. Entries hydrated from older
+    on-disk JSONL files that predate the field carry ``None``; those
+    are treated as v0 and excluded from the hash payload so their
+    stored digest still verifies.
     """
 
     timestamp: datetime
@@ -119,16 +147,30 @@ class AuditEntry:
     metadata: dict[str, Any] = field(default_factory=dict)
     previous_entry_hash: str | None = None
     entry_hash: str | None = None
+    schema_version: int | None = AUDIT_ENTRY_SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
-        """Return a plain-dict form suitable for JSON encoding."""
+        """Return a plain-dict form suitable for JSON encoding.
+
+        Pre-version entries (``schema_version is None``) omit the field
+        so the hash payload exactly matches what was used at write
+        time. New entries include it.
+        """
         d = asdict(self)
         d["timestamp"] = self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else self.timestamp
+        if self.schema_version is None:
+            d.pop("schema_version", None)
         return d
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AuditEntry:
-        """Inverse of :meth:`to_dict`."""
+        """Inverse of :meth:`to_dict`.
+
+        Entries without a ``schema_version`` key in the raw dict are
+        treated as v0 (pre-versioning) — the field is set to ``None``
+        so :meth:`to_dict` omits it from the hash payload and
+        verification still passes.
+        """
         ts = raw.get("timestamp")
         if isinstance(ts, str):
             ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -141,6 +183,7 @@ class AuditEntry:
             metadata=raw.get("metadata", {}) or {},
             previous_entry_hash=raw.get("previous_entry_hash"),
             entry_hash=raw.get("entry_hash"),
+            schema_version=raw.get("schema_version"),
         )
 
 
