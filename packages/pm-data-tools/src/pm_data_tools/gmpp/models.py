@@ -9,7 +9,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class QuarterPeriod(str, Enum):
@@ -57,9 +57,7 @@ class DCANarrative(BaseModel):
 
     text: str = Field(
         ...,
-        min_length=150,
-        max_length=300,
-        description="Professional civil service narrative (150-200 words recommended)"
+        description="Professional civil service narrative (150-200 words recommended; bounds enforced by validate_word_count)"
     )
     confidence: float = Field(
         ...,
@@ -259,16 +257,20 @@ class BenefitsPerformance(BaseModel):
         description="Data confidence score based on source reliability"
     )
 
-    @field_validator("realised_to_date")
-    @classmethod
-    def validate_realised_not_exceed_planned(cls, v: Decimal, info) -> Decimal:
-        """Validate realised benefits don't exceed forecast."""
-        values = info.data
-        if "forecast_total" in values and v > values["forecast_total"]:
+    @model_validator(mode="after")
+    def validate_realised_not_exceed_forecast(self) -> "BenefitsPerformance":
+        """Validate realised benefits don't exceed forecast.
+
+        Implemented as a model-level validator so it runs after both
+        ``realised_to_date`` and ``forecast_total`` are populated, regardless
+        of field declaration order.
+        """
+        if self.realised_to_date > self.forecast_total:
             raise ValueError(
-                f"Realised benefits ({v}M) cannot exceed forecast total ({values['forecast_total']}M)"
+                f"Realised benefits ({self.realised_to_date}M) cannot exceed "
+                f"forecast total ({self.forecast_total}M)"
             )
-        return v
+        return self
 
     @classmethod
     def from_benefits_register(
@@ -489,14 +491,18 @@ class QuarterlyReport(BaseModel):
         description="Non-critical validation warnings"
     )
 
-    @field_validator("dca_change_rationale")
-    @classmethod
-    def validate_rationale_if_changed(cls, v: str | None, info) -> str | None:
-        """Require rationale if DCA changed."""
-        values = info.data
-        if values.get("dca_changed") and not v:
+    @model_validator(mode="after")
+    def validate_rationale_if_changed(self) -> "QuarterlyReport":
+        """Require rationale if DCA changed.
+
+        Implemented as a model-level validator because pydantic v2 field
+        validators do not run when the field is omitted at construction time;
+        omitting ``dca_change_rationale`` while setting ``dca_changed=True``
+        must still raise.
+        """
+        if self.dca_changed and not self.dca_change_rationale:
             raise ValueError("DCA change rationale required when dca_changed is True")
-        return v
+        return self
 
     model_config = {
         "json_schema_extra": {
