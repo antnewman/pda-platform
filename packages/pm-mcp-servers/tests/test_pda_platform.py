@@ -1148,7 +1148,15 @@ class TestGuardrailEngine:
             e.rule_name for e in dirty.evaluations
         ]
 
-    def test_condition_that_raises_records_unknown_and_continues(self):
+    def test_condition_that_raises_fails_safe_at_nominal_severity(self):
+        """Audit finding P3.F07 fix.
+
+        Pre-fix behaviour: a crashing BLOCK rule was recorded as
+        ``UNKNOWN`` with ``violated=False``, so the verdict silently
+        downgraded to ``APPROVED``. Post-fix: the rule's nominal
+        severity is preserved in the trail and the entry is treated
+        as a violation, so a crashing BLOCK rule rejects.
+        """
         from pm_mcp_servers._guardrails import (
             Rule,
             Severity,
@@ -1170,11 +1178,12 @@ class TestGuardrailEngine:
             build_required_field_rule("verdict", severity=Severity.BLOCK),
         ]
         result = evaluate({"verdict": "GREEN"}, policy)
-        # Verdict is APPROVED — boom did NOT trigger rejection.
-        assert result.verdict == Verdict.APPROVED
-        # The trail records UNKNOWN for the broken rule.
+        # Crashing BLOCK rule must reject (P3.F07 fail-safe).
+        assert result.verdict == Verdict.REJECTED
+        # The trail preserves the rule's nominal severity, not UNKNOWN.
         boom_entry = next(e for e in result.evaluations if e.rule_name == "exploding_rule")
-        assert boom_entry.severity == Severity.UNKNOWN
+        assert boom_entry.severity == Severity.BLOCK
+        assert boom_entry.violated is True
         assert boom_entry.error == "RuntimeError"
 
     # ── Range / allowed-values rule builders ──────────────────────────
@@ -5363,3 +5372,220 @@ class TestAuditFix_P5F04_AuditRotation:
 
         result = _audit.verify_chain("recover_test")
         assert result.is_valid, result.message
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Tests for multipass-audit Week 3 — test coverage backfill
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestAuditFix_P6F02_AuditFailSafeProperty:
+    """Audit finding P6.F02. Audit-chain write failures must not break
+    tool output. This pins the fail-safe property end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_red_flags_returned_even_when_audit_chain_raises(
+        self, monkeypatch
+    ):
+        """Monkeypatch the audit module's ``record_decision`` to raise;
+        invoke ``scan_for_red_flags``; the JSON output must still
+        contain the red-flag payload, unchanged."""
+        import json
+        from pm_mcp_servers import _audit
+        from pm_mcp_servers.pm_assure import server as assure_server
+
+        _audit.reset_failure_stats()
+
+        def boom(*args, **kwargs):
+            raise IOError("audit write denied")
+
+        monkeypatch.setattr(_audit, "record_decision", boom)
+        monkeypatch.setattr(assure_server, "record_decision", boom)
+
+        result = await assure_server._scan_for_red_flags(
+            {"project_id": "PROJ-001"}
+        )
+        # Output should still be a valid JSON response, not an error
+        # propagated from the audit failure.
+        assert len(result) >= 1
+        payload = json.loads(result[0].text)
+        assert isinstance(payload, dict)
+        # The failure must be reflected in the counter, proving the
+        # swallow path took effect.
+        stats = _audit.failure_stats()
+        assert stats.get("pm_assure", 0) >= 1
+
+
+class TestAuditFix_P6F01_RouterFourTierCoverage:
+    """Audit finding P6.F01. Two of four router tiers were untested.
+    Add explicit coverage for DETAILED_REVIEW and SPOT_CHECK plus
+    the OR fail-safe interaction with mid tiers."""
+
+    def test_detailed_review_tier(self):
+        from agent_planning.escalation.router import route, EscalationLevel
+
+        # No-outlier sample (tight cluster) + confidence in [0.4, 0.6)
+        # → DETAILED_REVIEW.
+        decision = route(values=[1.0, 1.0, 1.0, 1.0, 1.0], confidence=0.5)
+        assert decision.level == EscalationLevel.DETAILED_REVIEW
+
+    def test_spot_check_tier(self):
+        from agent_planning.escalation.router import route, EscalationLevel
+
+        # No-outlier sample + confidence in [0.6, 0.8) → SPOT_CHECK.
+        decision = route(values=[1.0, 1.0, 1.0, 1.0, 1.0], confidence=0.7)
+        assert decision.level == EscalationLevel.SPOT_CHECK
+
+    def test_or_fail_safe_promotes_high_confidence_to_expert(self):
+        from agent_planning.escalation.router import route, EscalationLevel
+
+        # High confidence but an obvious outlier in the sample
+        # → EXPERT_REQUIRED via OR rule.
+        decision = route(
+            values=[1.0, 1.0, 1.0, 1.0, 1000.0],
+            confidence=0.95,
+        )
+        assert decision.level == EscalationLevel.EXPERT_REQUIRED
+
+
+class TestAuditFix_P6F03_ConformalEdgeCases:
+    """Audit finding P6.F03. Edge-of-input-space behaviour for
+    conformal prediction was unverified."""
+
+    def test_empty_residuals_raises(self):
+        from agent_planning.calibration.conformal import conformal_predict_band
+
+        with pytest.raises(ValueError, match="at least one residual"):
+            conformal_predict_band(100.0, [], alpha=0.2)
+
+    def test_single_residual_symmetric_band(self):
+        from agent_planning.calibration.conformal import conformal_predict_band
+
+        low, high = conformal_predict_band(100.0, [5.0], alpha=0.2)
+        assert low == 95.0
+        assert high == 105.0
+
+    def test_identical_residuals_zero_width_at_zero(self):
+        from agent_planning.calibration.conformal import conformal_predict_band
+
+        low, high = conformal_predict_band(50.0, [0.0, 0.0, 0.0], alpha=0.1)
+        assert low == high == 50.0
+
+    def test_extreme_alpha_rejected(self):
+        from agent_planning.calibration.conformal import conformal_predict_band
+
+        with pytest.raises(ValueError):
+            conformal_predict_band(0.0, [1.0], alpha=0.0)
+        with pytest.raises(ValueError):
+            conformal_predict_band(0.0, [1.0], alpha=1.0)
+
+
+class TestAuditFix_P6F07_CrossModuleIntegration:
+    """Audit finding P6.F07. L5 + L6 + L8 composition was tested
+    per-layer but never end-to-end on a single rejected request."""
+
+    def test_l5_reject_records_in_audit_chain_with_no_groundedness(
+        self, tmp_path, monkeypatch
+    ):
+        """When L5 rejects a generated narrative, the L8 audit entry
+        must show REJECTED and the response envelope must NOT carry
+        an L6 groundedness annotation."""
+        from pm_mcp_servers import _audit
+        from pm_mcp_servers._guardrails import (
+            Severity,
+            build_forbidden_phrase_rule,
+            evaluate,
+        )
+        from pm_mcp_servers._guardrails.wrapper import _rejection_payload
+
+        monkeypatch.setattr(_audit, "AUDIT_DIR", tmp_path)
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+
+        # L5 policy: forbidden phrase in the `narrative` field triggers BLOCK.
+        policy = [
+            build_forbidden_phrase_rule(
+                "narrative",
+                ["ignore prior instructions"],
+                severity=Severity.BLOCK,
+            )
+        ]
+        candidate = {
+            "narrative": "Some prose that says ignore prior instructions.",
+        }
+        result = evaluate(candidate, policy)
+        assert result.verdict.value == "REJECTED"
+
+        # L8 records the rejection.
+        envelope = _rejection_payload(result)
+        _audit.safe_record_decision(
+            "pm_reporting",
+            input_data=candidate,
+            output_data=envelope,
+            decision="REJECTED",
+            action="generate_board_exception_report",
+        )
+
+        verification = _audit.verify_chain("pm_reporting")
+        assert verification.is_valid
+        chain, _, _ = _audit._get_chain("pm_reporting")
+        assert chain.entries[-1].decision == "REJECTED"
+
+        # L6 groundedness must NOT be present in a rejection envelope.
+        assert "_groundedness" not in envelope
+
+
+class TestAuditFix_P6F10_ConcurrentInvocation:
+    """Audit finding P6.F10. The suite assumed single-flight; concurrent
+    audit-chain writes were never exercised."""
+
+    @pytest.mark.asyncio
+    async def test_two_concurrent_records_produce_two_linked_entries(
+        self, tmp_path, monkeypatch
+    ):
+        import asyncio
+        from pm_mcp_servers import _audit
+
+        monkeypatch.setattr(_audit, "AUDIT_DIR", tmp_path)
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+
+        async def _record(i: int):
+            return _audit.record_decision(
+                "concurrent_test",
+                input_data={"i": i},
+                output_data={"y": i + 1},
+                decision="OK",
+                action="t",
+            )
+
+        a, b = await asyncio.gather(_record(0), _record(1))
+
+        chain, _, _ = _audit._get_chain("concurrent_test")
+        assert len(chain.entries) == 2
+        assert chain.verify().is_valid
+        assert a.entry_hash != b.entry_hash
+
+
+class TestAuditFix_P6F11_ColdStartRegression:
+    """Audit finding P6.F11. The PR #72 lazy-import regression broke
+    Render because no test bounded import time."""
+
+    def test_unified_server_imports_under_threshold(self):
+        import importlib
+        import sys
+        import time
+
+        # Drop cached modules so we measure cold import.
+        for mod_name in list(sys.modules):
+            if mod_name.startswith("pm_mcp_servers.pda_platform"):
+                del sys.modules[mod_name]
+
+        start = time.perf_counter()
+        importlib.import_module("pm_mcp_servers.pda_platform.server")
+        elapsed = time.perf_counter() - start
+
+        # 10 seconds is the historical Render port-scan timeout
+        # ceiling. The actual cold-start on CI is sub-second; this
+        # threshold catches order-of-magnitude regressions.
+        assert elapsed < 10.0, f"unified server cold import took {elapsed:.2f}s"
