@@ -43,6 +43,18 @@ from .._validation import (
     validate_payload_size,
 )
 
+# Audit finding P4.F07. jsonschema is a transitive dependency of `mcp`
+# and is already available on the platform. Importing it here lets the
+# dispatcher validate inbound arguments against the per-tool
+# `inputSchema` so malformed inputs are rejected with a clean envelope
+# rather than crashing the owning handler with a TypeError.
+try:
+    import jsonschema as _jsonschema  # type: ignore[import]
+    from jsonschema import ValidationError as _JsonSchemaValidationError  # type: ignore[import]
+except ImportError:  # pragma: no cover - defensive
+    _jsonschema = None
+    _JsonSchemaValidationError = Exception  # type: ignore[assignment]
+
 from ..pm_analyse.registry import TOOLS as ANALYSE_TOOLS
 from ..pm_analyse.registry import dispatch as analyse_dispatch
 from ..pm_assure.registry import TOOLS as ASSURE_TOOLS
@@ -117,6 +129,12 @@ ALL_TOOLS: list[Tool] = (
     + SIMULATION_TOOLS + LESSONS_TOOLS + REPORTING_TOOLS + ASSUMPTIONS_TOOLS
 )
 
+# Audit finding P4.F07. Build a name → inputSchema lookup once at
+# import time so per-call schema validation in `call_tool` is O(1).
+_TOOL_SCHEMA: dict[str, dict[str, Any]] = {
+    tool.name: tool.inputSchema for tool in ALL_TOOLS if tool.inputSchema
+}
+
 logger.info(
     "PDA Platform unified server: %d tools from %d modules",
     len(ALL_TOOLS),
@@ -158,6 +176,20 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         validate_payload_size(arguments)
         if isinstance(arguments, dict):
             sanitise_arguments(arguments)
+            # Audit finding P4.F07. After cheap sanitisation, validate
+            # against the per-tool declared inputSchema so malformed
+            # inputs (wrong types, missing required fields) are
+            # rejected with a clean envelope rather than crashing
+            # the handler with a TypeError.
+            schema = _TOOL_SCHEMA.get(name)
+            if schema and _jsonschema is not None:
+                try:
+                    _jsonschema.validate(arguments, schema)
+                except _JsonSchemaValidationError as schema_exc:
+                    raise ValidationError(
+                        f"Input does not match tool schema: {schema_exc.message}",
+                        field=".".join(str(p) for p in schema_exc.absolute_path) or None,
+                    ) from schema_exc
     except ValidationError as exc:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         logger.warning(

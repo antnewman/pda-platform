@@ -42,11 +42,36 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from pm_data_tools.audit import AuditChain, AuditEntry, VerificationResult
+
+# Audit finding P2.F08 — lock ordering documentation and enforcement.
+#
+# Background. Each MCP module has its own audit chain, each with its
+# own per-module ``threading.Lock`` in :data:`_LOCKS`. A tool that
+# records to two chains in one logical request — say a cross-module
+# workflow that touches `pm_assure` and then `pm_assumptions` — holds
+# the two locks sequentially. If a sibling tool acquires the same two
+# locks in the opposite order, a deadlock is possible under
+# concurrent invocation.
+#
+# Mitigation. Locks must be acquired in **ascending alphabetical
+# module-name order**. The thread-local stack below tracks which
+# modules the current thread holds locks for; ``record_decision``
+# checks the stack before acquiring and warns (not raises — fail-open
+# preserves tool output) if the order is violated. Operators see the
+# warning in production logs and can audit the offending tool.
+_LOCK_ORDER_STATE = threading.local()
+
+
+def _lock_stack() -> list[str]:
+    if not hasattr(_LOCK_ORDER_STATE, "stack"):
+        _LOCK_ORDER_STATE.stack = []
+    return _LOCK_ORDER_STATE.stack
 
 __all__ = [
     "AUDIT_DIR",
@@ -299,23 +324,52 @@ def record_decision(
     tool execution to continue should wrap this call in ``try/except``.
     """
     chain, lock, log_path = _get_chain(module_name)
-    with lock:
-        # Audit finding P5.F04 — rotate before write so the new entry
-        # always lands in a sub-threshold file. Rotation is best-effort
-        # (size check + rename); failure to rotate falls through to a
-        # normal write so an unwritable archive name never blocks
-        # tool output.
-        rotate_if_needed(module_name)
-        entry = chain.record(
-            input_data=input_data,
-            output_data=output_data,
-            decision=decision,
-            action=action,
-            metadata=metadata or {},
+
+    # Audit finding P2.F08. Enforce ascending alphabetical lock
+    # ordering across modules. The check is best-effort: a violation
+    # logs a warning so operators can audit the offending tool but
+    # does not raise, preserving the platform's "audit failures must
+    # not break tool output" property.
+    stack = _lock_stack()
+    if stack and module_name <= stack[-1]:
+        logger.warning(
+            "audit_lock_order_violation",
+            extra={
+                "audit_module": module_name,
+                "currently_held": list(stack),
+                "advisory": (
+                    "Modules' audit-chain locks must be acquired in "
+                    "ascending alphabetical order to avoid deadlock. "
+                    "Refactor the calling tool."
+                ),
+            },
         )
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry.to_dict(), default=str) + "\n")
-        return entry
+    stack.append(module_name)
+
+    try:
+        with lock:
+            # Audit finding P5.F04 — rotate before write so the new entry
+            # always lands in a sub-threshold file. Rotation is best-effort
+            # (size check + rename); failure to rotate falls through to a
+            # normal write so an unwritable archive name never blocks
+            # tool output.
+            rotate_if_needed(module_name)
+            entry = chain.record(
+                input_data=input_data,
+                output_data=output_data,
+                decision=decision,
+                action=action,
+                metadata=metadata or {},
+            )
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry.to_dict(), default=str) + "\n")
+            return entry
+    finally:
+        # Audit finding P2.F08 — release the lock-order tracking even
+        # if record() raised. Mismatched pop is defensive: a refactor
+        # that broke append/pop pairing would not corrupt the stack.
+        if stack and stack[-1] == module_name:
+            stack.pop()
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -1088,9 +1088,29 @@ class AssuranceStore:
     # ------------------------------------------------------------------
     # Lessons learned (P7)
     # ------------------------------------------------------------------
+    #
+    # Audit finding P3.F02. Two overlapping tables exist:
+    #
+    # * ``lessons_learned`` — the older 14-column table written by
+    #   ``upsert_lesson`` (this method). Carries the original P7
+    #   columns: title, description, sentiment, project_phase, etc.
+    # * ``lessons`` — the newer 13-column table written by
+    #   ``upsert_project_lesson`` (further below). Used by the
+    #   pm-lessons MCP module's AI-extraction pipeline.
+    #
+    # The two tables are not mirrored, do not share an id column, and
+    # have different uniqueness semantics. Callers must choose the
+    # table that matches their writer; cross-reading is silent data
+    # loss. A future migration should consolidate to ``lessons``;
+    # until then, this comment is the contract. The same warning lives
+    # on ``upsert_project_lesson`` below so a developer reading either
+    # site sees it.
 
     def upsert_lesson(self, data: dict[str, object]) -> None:
-        """Insert or replace a lessons learned record.
+        """Insert or replace a lessons learned record into ``lessons_learned``.
+
+        See the audit-finding-P3.F02 banner above for why this method
+        writes to ``lessons_learned`` and not ``lessons``.
 
         Args:
             data: Dict with keys matching the ``lessons_learned`` table
@@ -2842,9 +2862,18 @@ class AssuranceStore:
     # ------------------------------------------------------------------
     # Lessons (pm-lessons module)
     # ------------------------------------------------------------------
+    #
+    # Audit finding P3.F02 (continued). This method writes to the
+    # newer ``lessons`` table; the older ``upsert_lesson`` writes to
+    # ``lessons_learned``. See the banner above ``upsert_lesson`` for
+    # the full rationale and migration disposition.
 
     def upsert_project_lesson(self, lesson: dict) -> str:
-        """Insert or replace a lesson record.
+        """Insert or replace a lesson record into ``lessons``.
+
+        See the audit-finding-P3.F02 banner above ``upsert_lesson``
+        for why this method writes to ``lessons`` and not
+        ``lessons_learned``.
 
         Args:
             lesson: Dict with keys matching the ``lessons`` table columns.
