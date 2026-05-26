@@ -12,6 +12,24 @@ Multipass-audit remediation cycle. Closes 28 of the 71 findings from
 the remaining 43 are deferred per the audit's own sequence (multi-worker
 concurrency, MEDIUM operability polish, LOW cosmetic).
 
+> **Release status.** The `v2.1.0` tag is on `main` and the source code
+> is the canonical 2.1.0 release. The four packages are **not yet on
+> PyPI** — the `Publish to PyPI` GitHub Actions workflow fails at the
+> `environment: pypi` gate (same failure mode as `v2.0.0` and
+> `v1.2.0`), blocked on an upstream PyPI Trusted Publisher /
+> environment-protection issue that is external to the codebase and
+> pending operator action. Render deploys from `main` directly and is
+> unaffected. To install before the PyPI publish unblocks, install
+> from source:
+>
+> ```bash
+> pip install git+https://github.com/antnewman/pda-platform.git@v2.1.0#subdirectory=packages/pda-platform
+> ```
+>
+> Once the upstream issue is resolved, re-running the failed workflow
+> from the Actions tab will pick up the existing `v2.1.0` tag and
+> publish without needing another commit.
+
 ### Added
 
 - **`pm_mcp_servers._validation`** — dispatch-layer input validation seam.
