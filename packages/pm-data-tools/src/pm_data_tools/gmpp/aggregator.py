@@ -9,7 +9,7 @@ complete GMPP quarterly reports, including:
 - Data lineage tracking
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from pm_data_tools.gmpp.models import (
@@ -140,7 +140,7 @@ class GMPPDataAggregator:
                 text="[Narrative pending - AI generation disabled or API key not configured]",
                 confidence=0.0,
                 review_level=ReviewLevel.EXPERT_REQUIRED,
-                generated_at=datetime.utcnow(),
+                generated_at=datetime.now(timezone.utc),
                 samples_used=0,
                 review_reason="Narrative generation disabled"
             )

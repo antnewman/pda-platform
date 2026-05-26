@@ -436,12 +436,12 @@ RISK_TOOLS: list[Tool] = [
 # ---------------------------------------------------------------------------
 
 def _get_store(arguments: dict[str, Any]) -> Any:
-    """Create an AssuranceStore from the optional db_path argument."""
-    from pm_data_tools.db.store import AssuranceStore
+    """Return a process-cached AssuranceStore (audit finding P2.F03)."""
+    from pm_data_tools.db.store import get_store
 
     raw_db_path = arguments.get("db_path")
     db_path = Path(raw_db_path) if raw_db_path else None
-    return AssuranceStore(db_path=db_path)
+    return get_store(db_path)
 
 
 def _verbal_rating(score: int) -> str:

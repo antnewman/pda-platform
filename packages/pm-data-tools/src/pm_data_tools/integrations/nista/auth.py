@@ -8,7 +8,7 @@ This module provides secure authentication for NISTA API access using:
 """
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from pydantic import BaseModel, Field
@@ -176,7 +176,7 @@ class NISTAAuthClient:
 
         # Refresh if token expires within 60 seconds
         buffer = timedelta(seconds=60)
-        return datetime.utcnow() < (self._token_expires - buffer)
+        return datetime.now(timezone.utc) < (self._token_expires - buffer)
 
     async def _fetch_new_token(self) -> str:
         """Fetch new access token from NISTA OAuth server.
@@ -230,7 +230,7 @@ class NISTAAuthClient:
         self._access_token = token_data["access_token"]
 
         expires_in = token_data.get("expires_in", 3600)  # Default 1 hour
-        self._token_expires = datetime.utcnow() + timedelta(seconds=expires_in)
+        self._token_expires = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
         return self._access_token
 
