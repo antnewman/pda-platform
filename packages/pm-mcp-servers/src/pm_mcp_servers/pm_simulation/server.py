@@ -18,7 +18,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._audit import record_decision, safe_record_decision
 
 server = Server("pm-simulation")
 
@@ -44,18 +44,16 @@ def _safe_record_decision(
     action: str,
     metadata: dict | None = None,
 ) -> None:
-    """Best-effort audit-chain record. Never raises."""
-    try:
-        record_decision(
-            _AUDIT_MODULE,
-            input_data=input_data,
-            output_data=output_data,
-            decision=decision,
-            action=action,
-            metadata=metadata,
-        )
-    except Exception:
-        pass
+    """Best-effort audit-chain record. Logs and counts on failure
+    (audit findings P1.F01 / P1.F02 / P5.F01)."""
+    safe_record_decision(
+        _AUDIT_MODULE,
+        input_data=input_data,
+        output_data=output_data,
+        decision=decision,
+        action=action,
+        metadata=metadata,
+    )
 
 SIMULATION_TOOLS: list[Tool] = [
     Tool(
@@ -165,12 +163,10 @@ SIMULATION_TOOLS: list[Tool] = [
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
 def _get_store(db_path: str | None = None):
-    """Create an AssuranceStore from an optional db_path argument."""
-    from pm_data_tools.db.store import AssuranceStore
+    """Return a process-cached AssuranceStore (audit finding P2.F03)."""
+    from pm_data_tools.db.store import get_store
 
-    if db_path:
-        return AssuranceStore(db_path=Path(db_path))
-    return AssuranceStore()
+    return get_store(Path(db_path) if db_path else None)
 
 
 def _triangular_sample(min_val: float, mode: float, max_val: float) -> float:

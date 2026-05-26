@@ -4,7 +4,7 @@ This module provides a high-level client for interacting with NISTA systems,
 including quarterly return submission, project metadata fetching, and error handling.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -144,7 +144,7 @@ class NISTAAPIClient:
 
         # Add submission metadata
         submission_data["_submission_metadata"] = {
-            "submitted_at": datetime.utcnow().isoformat(),
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
             "client_version": "pm-data-tools-0.2.0",
             "client_name": "pda-platform",
         }
@@ -160,7 +160,7 @@ class NISTAAPIClient:
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
                     "X-NISTA-Project-ID": project_id,
-                    "X-Submission-Date": datetime.utcnow().isoformat(),
+                    "X-Submission-Date": datetime.now(timezone.utc).isoformat(),
                 },
                 timeout=self.auth.config.timeout_seconds,
             )
@@ -181,7 +181,7 @@ class NISTAAPIClient:
                 return SubmissionResult(
                     success=True,
                     submission_id=response_data.get("submission_id"),
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     validation_warnings=response_data.get("warnings", []),
                 )
 
@@ -189,7 +189,7 @@ class NISTAAPIClient:
             error_data = response.json()
             return SubmissionResult(
                 success=False,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 error=error_data.get("error", f"HTTP {response.status_code}"),
                 details=error_data.get("details"),
             )
@@ -198,7 +198,7 @@ class NISTAAPIClient:
             # HTTP error response
             return SubmissionResult(
                 success=False,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 error=f"HTTP {e.response.status_code}: {e.response.text}",
             )
 
@@ -206,7 +206,7 @@ class NISTAAPIClient:
             # Network/connection error
             return SubmissionResult(
                 success=False,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 error=f"Request failed: {str(e)}",
             )
 

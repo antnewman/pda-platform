@@ -17,7 +17,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._audit import record_decision, safe_record_decision
 
 app = Server("pm-assure-server")
 
@@ -45,20 +45,21 @@ def _safe_record_decision(
     action: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
-    """Best-effort audit-chain record. Never raises."""
-    try:
-        record_decision(
-            _AUDIT_MODULE,
-            input_data=input_data,
-            output_data=output_data,
-            decision=decision,
-            action=action,
-            metadata=metadata,
-        )
-    except Exception:
-        # Audit failures must not break tool output. Operators inspect
-        # chain integrity via verify_chain("pm_assure") on demand.
-        pass
+    """Best-effort audit-chain record. Never raises.
+
+    Thin alias for :func:`pm_mcp_servers._audit.safe_record_decision`
+    bound to this module's chain. Failures are now logged + counted
+    centrally (audit findings P1.F01, P5.F01); see the wrapper for the
+    operator-visibility story.
+    """
+    safe_record_decision(
+        _AUDIT_MODULE,
+        input_data=input_data,
+        output_data=output_data,
+        decision=decision,
+        action=action,
+        metadata=metadata,
+    )
 
 
 # ---------------------------------------------------------------------------

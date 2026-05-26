@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 __all__ = [
@@ -233,7 +233,7 @@ class AuditChain:
         non-JSON types are stringified via the default callback.
         """
         entry = AuditEntry(
-            timestamp=timestamp or datetime.utcnow(),
+            timestamp=timestamp or datetime.now(timezone.utc),
             action=action,
             input_hash=_sha256(canonical_serialise(input_data)),
             output_hash=_sha256(canonical_serialise(output_data)),

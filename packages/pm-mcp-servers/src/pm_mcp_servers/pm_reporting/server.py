@@ -18,7 +18,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-from pm_mcp_servers._audit import record_decision
+from pm_mcp_servers._audit import record_decision, safe_record_decision
 from pm_mcp_servers._groundedness import compute_groundedness
 from pm_mcp_servers._guardrails import (
     Severity,
@@ -49,18 +49,16 @@ def _safe_record_decision(
     action: str,
     metadata: dict | None = None,
 ) -> None:
-    """Best-effort audit-chain record. Never raises."""
-    try:
-        record_decision(
-            _AUDIT_MODULE,
-            input_data=input_data,
-            output_data=output_data,
-            decision=decision,
-            action=action,
-            metadata=metadata,
-        )
-    except Exception:
-        pass
+    """Best-effort audit-chain record. Logs and counts on failure
+    (audit findings P1.F01 / P1.F02 / P5.F01)."""
+    safe_record_decision(
+        _AUDIT_MODULE,
+        input_data=input_data,
+        output_data=output_data,
+        decision=decision,
+        action=action,
+        metadata=metadata,
+    )
 
 
 def _classify_l5_verdict_from_payload(text: str) -> str:
@@ -478,9 +476,9 @@ REPORTING_TOOLS: list[Tool] = [
 # ── Data gathering helpers ─────────────────────────────────────────────────────
 
 def _get_store():
-    """Return an AssuranceStore instance."""
-    from pm_data_tools.db.store import AssuranceStore
-    return AssuranceStore()
+    """Return a process-cached AssuranceStore (audit finding P2.F03)."""
+    from pm_data_tools.db.store import get_store
+    return get_store()
 
 
 def _gather_project_data(project_id: str) -> dict[str, Any]:

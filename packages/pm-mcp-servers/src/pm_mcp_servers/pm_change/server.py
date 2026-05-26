@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -289,7 +289,7 @@ async def _log_change_request(arguments: dict[str, Any]) -> list[TextContent]:
     """Register a new change request."""
     try:
         store = _get_store(arguments)
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         change_id = str(uuid.uuid4())
 
         data = {
@@ -378,7 +378,7 @@ async def _update_change_status(arguments: dict[str, Any]) -> list[TextContent]:
                 "implementation_date"
             )
             updated["notes"] = merged_notes
-            updated["updated_at"] = datetime.utcnow().isoformat()
+            updated["updated_at"] = datetime.now(timezone.utc).isoformat()
             store.upsert_change_request(updated)
 
         record = store.get_change_request_by_id(change_id)
