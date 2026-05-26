@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pm-mcp-servers"
-version = "2.0.0"
+version = "2.1.0"
 description = "126 MCP tools across 18 modules for UK government IPA Gate Review assurance. Risk registers, Monte Carlo simulation, narrative divergence detection, earned value, benefits realisation, lessons learned, gate readiness, calibration evaluation, and escalation routing."
 readme = "README.md"
 license = {text = "MIT"}
