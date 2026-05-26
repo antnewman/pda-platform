@@ -56,9 +56,110 @@ __all__ = [
     "safe_record_decision",
     "failure_stats",
     "reset_failure_stats",
+    "rotate_if_needed",
+    "chain_sizes",
+    "ROTATION_SIZE_BYTES",
 ]
 
 logger = logging.getLogger(__name__)
+
+
+# Audit finding P5.F04. The on-disk JSONL files grew without bound,
+# making process restart slow and a disk-full failure mode invisible
+# to the operator. The rotation policy below is size-driven (not time
+# driven — simpler, deterministic, and matches the audit's "expose
+# size metric" recommendation). When the current file passes the
+# threshold, it is renamed to the next free numbered archive
+# (e.g. ``pm_assure.jsonl.1``, ``.2``, ...). The in-memory chain is
+# untouched — every entry that has been recorded since process start
+# remains in the cache — so the hash chain continues unbroken from
+# the next write.
+#
+# Hydration on a fresh process reads archives in numeric order, then
+# the current file, so the recovered chain matches the live one.
+ROTATION_SIZE_BYTES = int(
+    os.environ.get("PDA_AUDIT_ROTATION_SIZE_BYTES", str(10 * 1024 * 1024))
+)
+
+
+def _archive_path(module_name: str, index: int) -> Path:
+    return AUDIT_DIR / f"{module_name}.jsonl.{index}"
+
+
+def _next_archive_index(module_name: str) -> int:
+    """Find the next free archive index for ``module_name``."""
+    index = 1
+    while _archive_path(module_name, index).exists():
+        index += 1
+    return index
+
+
+def rotate_if_needed(module_name: str) -> Path | None:
+    """Rotate ``<module>.jsonl`` if it exceeds the size threshold.
+
+    Returns the new archive path on rotation, otherwise ``None``. Safe
+    to call before every write — the size check is a single ``stat()``.
+    """
+    log_path = _log_path(module_name)
+    if not log_path.exists():
+        return None
+    try:
+        size = log_path.stat().st_size
+    except OSError:
+        return None
+    if size < ROTATION_SIZE_BYTES:
+        return None
+    archive = _archive_path(module_name, _next_archive_index(module_name))
+    try:
+        log_path.rename(archive)
+    except OSError as exc:
+        logger.warning(
+            "audit_chain_rotation_failed",
+            extra={
+                "audit_module": module_name,
+                "size_bytes": size,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+        return None
+    logger.info(
+        "audit_chain_rotated",
+        extra={
+            "audit_module": module_name,
+            "archive": str(archive),
+            "size_bytes": size,
+        },
+    )
+    return archive
+
+
+def chain_sizes() -> dict[str, int]:
+    """Return current + archive byte sizes per module.
+
+    Exposed via ``/health`` so operators can see audit chain growth
+    without parsing JSONL files. Returns ``{}`` if the audit
+    directory does not exist.
+    """
+    sizes: dict[str, int] = {}
+    if not AUDIT_DIR.exists():
+        return sizes
+    for path in AUDIT_DIR.iterdir():
+        if not path.is_file():
+            continue
+        # Match ``<module>.jsonl`` and ``<module>.jsonl.<n>``.
+        name = path.name
+        if name.endswith(".jsonl"):
+            module_name = name[: -len(".jsonl")]
+        elif ".jsonl." in name:
+            module_name = name.split(".jsonl.")[0]
+        else:
+            continue
+        try:
+            sizes[module_name] = sizes.get(module_name, 0) + path.stat().st_size
+        except OSError:
+            continue
+    return sizes
 
 
 def _default_audit_dir() -> Path:
@@ -103,13 +204,44 @@ def _log_path(module_name: str) -> Path:
 
 
 def _hydrate_chain(module_name: str) -> AuditChain:
-    """Load existing entries from disk and rebuild the in-memory chain."""
-    log_path = _log_path(module_name)
+    """Load existing entries from disk and rebuild the in-memory chain.
+
+    Reads numbered archives in order (``<module>.jsonl.1`` …
+    ``<module>.jsonl.N``) followed by the current ``<module>.jsonl``
+    so the recovered chain matches the write-order across rotations
+    (audit finding P5.F04).
+    """
     signing_key = _signing_key()
-    if not log_path.exists():
-        return AuditChain(signing_key=signing_key)
     entries: list[dict[str, Any]] = []
-    with open(log_path, encoding="utf-8") as f:
+
+    # Archives are written in ascending order of rotation: index 1
+    # is the oldest. Hydration reads them in that order so the
+    # rebuilt chain matches the original sequence.
+    index = 1
+    while True:
+        archive = _archive_path(module_name, index)
+        if not archive.exists():
+            break
+        _read_jsonl_into(archive, entries)
+        index += 1
+
+    log_path = _log_path(module_name)
+    if log_path.exists():
+        _read_jsonl_into(log_path, entries)
+
+    if not entries:
+        return AuditChain(signing_key=signing_key)
+    return AuditChain.from_json(json.dumps(entries), signing_key=signing_key)
+
+
+def _read_jsonl_into(path: Path, entries: list[dict[str, Any]]) -> None:
+    """Append JSON-decodable lines from ``path`` to ``entries``.
+
+    Malformed lines are skipped; ``verify_chain`` surfaces them when
+    called rather than crashing hydration (audit finding P3.F03 also
+    leans on this resilience).
+    """
+    with open(path, encoding="utf-8") as f:
         for raw in f:
             raw = raw.strip()
             if not raw:
@@ -117,10 +249,7 @@ def _hydrate_chain(module_name: str) -> AuditChain:
             try:
                 entries.append(json.loads(raw))
             except ValueError:
-                # Skip corrupted line — verify_chain will report it
-                # when called, rather than crashing during hydration.
                 continue
-    return AuditChain.from_json(json.dumps(entries), signing_key=signing_key)
 
 
 def _get_chain(module_name: str) -> tuple[AuditChain, Lock, Path]:
@@ -171,6 +300,12 @@ def record_decision(
     """
     chain, lock, log_path = _get_chain(module_name)
     with lock:
+        # Audit finding P5.F04 — rotate before write so the new entry
+        # always lands in a sub-threshold file. Rotation is best-effort
+        # (size check + rename); failure to rotate falls through to a
+        # normal write so an unwritable archive name never blocks
+        # tool output.
+        rotate_if_needed(module_name)
         entry = chain.record(
             input_data=input_data,
             output_data=output_data,

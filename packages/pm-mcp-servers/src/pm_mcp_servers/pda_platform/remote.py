@@ -22,9 +22,41 @@ import os
 import sys
 import time
 
-# Print to stderr immediately so Render logs show we've started, even if
-# later imports fail. This helps diagnose silent import crashes.
-print("[pda-platform-remote] starting imports...", file=sys.stderr, flush=True)
+# Audit finding P5.F07. Bootstrap progress is now emitted via the
+# stdlib logger so it appears in structured logs alongside the rest of
+# the platform's output, with a relative timestamp tag for cold-start
+# diagnostics. A duplicate stderr print is kept for the very first
+# event so an operator inspecting raw stderr on Render still sees the
+# process is alive — the logger may not yet be configured at this
+# point in import time.
+_IMPORT_T0 = time.time()
+_bootstrap_logger = logging.getLogger("pda_platform.bootstrap")
+if not _bootstrap_logger.handlers:
+    _bootstrap_handler = logging.StreamHandler(stream=sys.stderr)
+    _bootstrap_handler.setFormatter(
+        logging.Formatter(
+            "[pda-platform-remote] T+%(rel_seconds).2fs phase=%(phase)s %(message)s"
+        )
+    )
+    _bootstrap_logger.addHandler(_bootstrap_handler)
+    _bootstrap_logger.setLevel(logging.INFO)
+
+
+def _log_bootstrap_phase(phase: str, message: str) -> None:
+    """Emit a structured bootstrap log line with a relative timestamp.
+
+    Replaces the legacy stderr ``print()`` calls flagged in audit
+    finding P5.F07. The ``rel_seconds`` extra is wall-clock seconds
+    since first-import so operators can spot slow imports without
+    correlating absolute timestamps.
+    """
+    _bootstrap_logger.info(
+        message,
+        extra={"rel_seconds": time.time() - _IMPORT_T0, "phase": phase},
+    )
+
+
+_log_bootstrap_phase("imports.start", "starting imports")
 
 from pathlib import Path  # noqa: E402
 from mcp.server.sse import SseServerTransport  # noqa: E402
@@ -34,16 +66,28 @@ from starlette.requests import Request  # noqa: E402
 from starlette.responses import FileResponse, JSONResponse  # noqa: E402
 from starlette.routing import Route  # noqa: E402
 
-print("[pda-platform-remote] transport/web imports ok", file=sys.stderr, flush=True)
+_log_bootstrap_phase("imports.transport_ok", "transport and web imports ok")
 
 from .server import ALL_TOOLS, server  # noqa: E402
 from ..pm_assumptions.server import build_assumption_dashboard_panels  # noqa: E402
 from .. import _audit  # noqa: E402
 
-print(f"[pda-platform-remote] loaded {len(ALL_TOOLS)} tools", file=sys.stderr, flush=True)
+_log_bootstrap_phase(
+    "imports.tools_loaded", f"loaded {len(ALL_TOOLS)} tools"
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Audit finding P5.F06. The platform falls back to evidence-only mode
+# when ``ANTHROPIC_API_KEY`` is absent. Operators should learn this at
+# deploy time, not at the first call to a Claude-authored tool.
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    _log_bootstrap_phase(
+        "config.anthropic_missing",
+        "ANTHROPIC_API_KEY not set; AI-authored tools will use "
+        "evidence-only fallback (audit finding P5.F06).",
+    )
 
 # Wall-clock at first-import — used by /health for an uptime indicator
 # (audit finding P5.F08).
@@ -143,6 +187,9 @@ async def health(request: Request):
         ),
         "dashboard_token_required": bool(_DASHBOARD_TOKEN),
         "audit_failure_count": _audit.failure_stats(),
+        # Audit finding P5.F04 — chain size per module so a growing
+        # JSONL backlog is visible without parsing the files.
+        "audit_chain_size_bytes": _audit.chain_sizes(),
     })
 
 

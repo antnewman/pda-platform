@@ -5071,3 +5071,295 @@ class TestAuditFix_P4F02_DashboardAuth:
         # We expect either 200 or 400 (data build may fail for empty
         # project) but never 401 once the token is valid.
         assert response.status_code != 401
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Tests for multipass-audit Week 2 hardening
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestAuditFix_P3F11_RejectionEnvelopeVersion:
+    """Audit finding P3.F11. The L5 rejection envelope must carry a
+    schema_version so future structural changes have a compatibility
+    signal."""
+
+    def test_rejection_payload_includes_schema_version(self):
+        from pm_mcp_servers._guardrails.engine import (
+            EvaluationResult,
+            RuleEvaluation,
+            Severity,
+            Verdict,
+        )
+        from pm_mcp_servers._guardrails.wrapper import (
+            _rejection_payload,
+            REJECTION_ENVELOPE_SCHEMA_VERSION,
+        )
+
+        result = EvaluationResult(
+            verdict=Verdict.REJECTED,
+            evaluations=[
+                RuleEvaluation(
+                    rule_name="r1",
+                    severity=Severity.BLOCK,
+                    violated=True,
+                    message="boom",
+                )
+            ],
+            triggered=[
+                RuleEvaluation(
+                    rule_name="r1",
+                    severity=Severity.BLOCK,
+                    violated=True,
+                    message="boom",
+                )
+            ],
+        )
+        payload = _rejection_payload(result)
+        assert payload["schema_version"] == REJECTION_ENVELOPE_SCHEMA_VERSION
+        assert payload["error"] == "guardrail_rejected"
+
+
+class TestAuditFix_P3F07_GuardrailExceptionFailSafe:
+    """Audit finding P3.F07. A BLOCK rule whose condition raises must
+    cause REJECTED, not silently downgrade to APPROVED."""
+
+    def test_crashing_block_rule_rejects(self):
+        from pm_mcp_servers._guardrails.engine import (
+            Rule,
+            Severity,
+            Verdict,
+            evaluate,
+        )
+
+        def boom(_output):
+            raise KeyError("missing field")
+
+        policy = [
+            Rule(
+                name="crashing_block",
+                description="must not allow",
+                severity=Severity.BLOCK,
+                condition=boom,
+            )
+        ]
+        result = evaluate({"x": 1}, policy)
+        assert result.verdict == Verdict.REJECTED
+        assert result.triggered[0].severity == Severity.BLOCK
+        assert result.triggered[0].error == "KeyError"
+
+    def test_crashing_warn_rule_flags(self):
+        from pm_mcp_servers._guardrails.engine import (
+            Rule,
+            Severity,
+            Verdict,
+            evaluate,
+        )
+
+        def boom(_output):
+            raise RuntimeError()
+
+        result = evaluate(
+            {},
+            [
+                Rule(
+                    name="crashing_warn",
+                    description="should flag",
+                    severity=Severity.WARN,
+                    condition=boom,
+                )
+            ],
+        )
+        assert result.verdict == Verdict.FLAGGED
+
+    def test_crashing_info_rule_still_approved(self):
+        from pm_mcp_servers._guardrails.engine import (
+            Rule,
+            Severity,
+            Verdict,
+            evaluate,
+        )
+
+        def boom(_output):
+            raise ValueError()
+
+        result = evaluate(
+            {},
+            [
+                Rule(
+                    name="crashing_info",
+                    description="advisory",
+                    severity=Severity.INFO,
+                    condition=boom,
+                )
+            ],
+        )
+        # INFO never affects verdict even when treated as a violation.
+        assert result.verdict == Verdict.APPROVED
+
+
+class TestAuditFix_P3F03_AuditEntryVersion:
+    """Audit finding P3.F03. New AuditEntry instances carry
+    schema_version; pre-versioning entries still verify."""
+
+    def test_new_entry_has_schema_version(self):
+        from pm_data_tools.audit import AuditChain
+
+        chain = AuditChain()
+        entry = chain.record(
+            input_data={"x": 1},
+            output_data={"y": 2},
+            decision="OK",
+            action="t",
+        )
+        assert entry.schema_version == 1
+        assert chain.verify().is_valid
+
+    def test_legacy_entry_without_version_field_verifies(self):
+        from datetime import datetime, timezone
+        from pm_data_tools.audit import AuditChain
+        from pm_data_tools.audit.chain import AuditEntry
+
+        chain = AuditChain()
+        v0_payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "action": "t",
+            "input_hash": "deadbeef",
+            "output_hash": "cafebabe",
+            "decision": "OK",
+            "metadata": {},
+            "previous_entry_hash": None,
+        }
+        entry = AuditEntry.from_dict(v0_payload)
+        assert entry.schema_version is None
+        entry.entry_hash = chain._compute_entry_hash(entry)
+        chain._entries.append(entry)
+        assert chain.verify().is_valid
+
+
+class TestAuditFix_P5F05_ErrorEnvelope:
+    """Audit finding P5.F05. Canonical error envelope helper is
+    available and the dispatch path uses it."""
+
+    def test_envelope_shape(self):
+        from pm_mcp_servers._validation import (
+            error_envelope,
+            ERROR_ENVELOPE_SCHEMA_VERSION,
+        )
+
+        env = error_envelope(
+            "upstream_timeout",
+            "Claude API timed out after 30s",
+            context={"tool": "generate_board_exception_report"},
+        )
+        assert env["error"]["code"] == "upstream_timeout"
+        assert env["error"]["schema_version"] == ERROR_ENVELOPE_SCHEMA_VERSION
+        assert env["error"]["context"]["tool"] == "generate_board_exception_report"
+
+    def test_dispatch_rejection_carries_envelope(self):
+        import json
+        import asyncio
+        from pm_mcp_servers.pda_platform.server import call_tool
+
+        result = asyncio.run(
+            call_tool(
+                "nista_longitudinal_trend",
+                {"project_id": "PROJ\nINJECTION"},
+            )
+        )
+        payload = json.loads(result[0].text)
+        assert payload["error"] == "validation_rejected"
+        assert payload["_envelope"]["code"] == "validation_rejected"
+        assert payload["_envelope"]["schema_version"] == 1
+
+
+class TestAuditFix_P5F04_AuditRotation:
+    """Audit finding P5.F04. Audit JSONL files rotate when they exceed
+    the configured threshold and chain integrity survives rotation."""
+
+    def test_rotate_when_under_threshold_is_noop(self, tmp_path, monkeypatch):
+        from pm_mcp_servers import _audit
+
+        monkeypatch.setattr(_audit, "AUDIT_DIR", tmp_path)
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+        _audit.reset_failure_stats()
+
+        _audit.record_decision(
+            "rotate_test",
+            input_data={"x": 1},
+            output_data={"y": 2},
+            decision="OK",
+            action="t",
+        )
+        assert _audit.rotate_if_needed("rotate_test") is None
+
+    def test_rotate_when_over_threshold_creates_archive(
+        self, tmp_path, monkeypatch
+    ):
+        from pm_mcp_servers import _audit
+
+        monkeypatch.setattr(_audit, "AUDIT_DIR", tmp_path)
+        monkeypatch.setattr(_audit, "ROTATION_SIZE_BYTES", 16)
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+
+        _audit.record_decision(
+            "rotate_test",
+            input_data={"x": 1},
+            output_data={"y": 2},
+            decision="OK",
+            action="t",
+        )
+        _audit.record_decision(
+            "rotate_test",
+            input_data={"x": 2},
+            output_data={"y": 3},
+            decision="OK",
+            action="t",
+        )
+        archive = tmp_path / "rotate_test.jsonl.1"
+        assert archive.exists()
+
+    def test_chain_size_metric_exposed(self, tmp_path, monkeypatch):
+        from pm_mcp_servers import _audit
+
+        monkeypatch.setattr(_audit, "AUDIT_DIR", tmp_path)
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+
+        _audit.record_decision(
+            "size_test",
+            input_data={"x": 1},
+            output_data={"y": 2},
+            decision="OK",
+            action="t",
+        )
+        sizes = _audit.chain_sizes()
+        assert "size_test" in sizes
+        assert sizes["size_test"] > 0
+
+    def test_hydration_recovers_chain_across_archives(
+        self, tmp_path, monkeypatch
+    ):
+        from pm_mcp_servers import _audit
+
+        monkeypatch.setattr(_audit, "AUDIT_DIR", tmp_path)
+        monkeypatch.setattr(_audit, "ROTATION_SIZE_BYTES", 16)
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+
+        for i in range(3):
+            _audit.record_decision(
+                "recover_test",
+                input_data={"i": i},
+                output_data={"y": i + 10},
+                decision="OK",
+                action="t",
+            )
+
+        # Simulate process restart by dropping the in-memory cache.
+        _audit._CHAINS.clear()
+        _audit._LOCKS.clear()
+
+        result = _audit.verify_chain("recover_test")
+        assert result.is_valid, result.message

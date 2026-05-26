@@ -191,12 +191,12 @@ def evaluate(output: dict[str, Any], policy: list[Rule]) -> EvaluationResult:
     ``FLAGGED``; otherwise → ``APPROVED``. ``UNKNOWN`` and ``INFO``
     outcomes are recorded in the trail but do not change the verdict.
 
-    A rule whose condition raises is recorded as ``violated=False`` with
-    severity downgraded to ``UNKNOWN`` for the trail entry (the rule's
-    nominal severity is preserved in the result for traceability — see
-    ``message`` and ``error``). This matches the paper's failure-mode
-    handling: a malformed rule should not bring down the engine, but
-    should be visible in the trail.
+    A rule whose condition raises is treated as a **violation at the
+    rule's nominal severity** — a fail-safe interpretation that prevents
+    a crashing ``BLOCK`` rule from silently downgrading to ``APPROVED``
+    (audit finding P3.F07). The error type is recorded in the trail
+    entry so a reviewer can distinguish "rule fired" from "rule
+    crashed; we treated the crash as a violation".
 
     Args:
         output: The candidate output dict (typically a tool's parsed
@@ -217,16 +217,34 @@ def evaluate(output: dict[str, Any], policy: list[Rule]) -> EvaluationResult:
         try:
             violated = bool(rule.condition(output))
         except Exception as exc:
-            # Condition raised — record as UNKNOWN and continue.
-            evaluations.append(
-                RuleEvaluation(
-                    rule_name=rule.name,
-                    severity=Severity.UNKNOWN,
-                    violated=False,
-                    message=f"{rule.description} (condition raised: {exc})",
-                    error=type(exc).__name__,
-                )
+            # Condition raised — audit finding P3.F07 fail-safe.
+            #
+            # Previously this branch recorded UNKNOWN severity and
+            # `violated=False`, which meant a crashing BLOCK rule
+            # silently downgraded to APPROVED — exactly the case
+            # the framework should fail-safe on.
+            #
+            # The fix preserves the rule's *nominal* severity and
+            # records the entry as a violation. A crashing BLOCK
+            # therefore rejects, a crashing WARN flags, and a
+            # crashing INFO is still recorded but does not alter
+            # the verdict (matches its design intent).
+            entry = RuleEvaluation(
+                rule_name=rule.name,
+                severity=rule.severity,
+                violated=True,
+                message=(
+                    f"{rule.description} (condition raised: {exc}; "
+                    f"treated as violation under audit P3.F07 fail-safe)"
+                ),
+                error=type(exc).__name__,
             )
+            evaluations.append(entry)
+            triggered.append(entry)
+            if rule.severity == Severity.BLOCK:
+                any_block = True
+            elif rule.severity == Severity.WARN:
+                any_warn = True
             continue
 
         entry = RuleEvaluation(

@@ -36,7 +36,12 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from .._validation import ValidationError, sanitise_arguments, validate_payload_size
+from .._validation import (
+    ValidationError,
+    error_envelope,
+    sanitise_arguments,
+    validate_payload_size,
+)
 
 from ..pm_analyse.registry import TOOLS as ANALYSE_TOOLS
 from ..pm_analyse.registry import dispatch as analyse_dispatch
@@ -165,6 +170,14 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                 "elapsed_ms": elapsed_ms,
             },
         )
+        # The canonical envelope shape (audit finding P5.F05) is
+        # offered alongside the existing top-level keys so consumers
+        # can migrate incrementally. Existing keys remain unchanged.
+        envelope = error_envelope(
+            code="validation_rejected",
+            message=str(exc),
+            context={"field": exc.field, "tool": name},
+        )
         return [
             TextContent(
                 type="text",
@@ -173,6 +186,7 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
                         "error": "validation_rejected",
                         "field": exc.field,
                         "reason": str(exc),
+                        "_envelope": envelope["error"],
                     }
                 ),
             )

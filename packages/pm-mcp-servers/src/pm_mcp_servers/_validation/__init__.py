@@ -39,7 +39,55 @@ __all__ = [
     "PROJECT_ID_PATTERN",
     "sanitise_arguments",
     "validate_payload_size",
+    "error_envelope",
+    "ERROR_ENVELOPE_SCHEMA_VERSION",
 ]
+
+
+# Canonical error envelope (audit finding P5.F05). The pre-fix
+# situation: three modules each used a different shape — flat
+# ``{"error": str, "traceback": str}``, semi-nested
+# ``{"error": {"code": str, "message": str}}``, fully-nested
+# ``{"error": {"code": str, "message": str, "description": str}}``.
+# Consumers writing dashboards or alerts had to handle all three.
+# The helper below standardises on one shape and is wired into the
+# dispatch-layer validation rejection path; per-module retrofits can
+# follow.
+ERROR_ENVELOPE_SCHEMA_VERSION = 1
+
+
+def error_envelope(
+    code: str,
+    message: str,
+    *,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the canonical error envelope (P5.F05).
+
+    Shape::
+
+        {
+            "error": {
+                "code": "<short_machine_code>",
+                "message": "<operator-facing string>",
+                "context": {...},
+                "schema_version": 1,
+            }
+        }
+
+    ``code`` is a short identifier suitable for log aggregation
+    (e.g. ``"validation_rejected"``, ``"upstream_timeout"``).
+    ``message`` is a human-readable string.
+    ``context`` is any module-specific structured detail.
+    """
+    return {
+        "error": {
+            "code": code,
+            "message": message,
+            "context": dict(context or {}),
+            "schema_version": ERROR_ENVELOPE_SCHEMA_VERSION,
+        }
+    }
 
 
 # Maximum length for any single string field flowing into a tool.
