@@ -456,6 +456,90 @@ def reset_failure_stats() -> None:
         _FAILURE_COUNTER.clear()
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Best-effort wrapper + failure-counter telemetry
+# ──────────────────────────────────────────────────────────────────────
+# Audit findings P1.F01, P1.F02 (silent swallow), P5.F01 (no operator
+# visibility) all reduce to the same underlying problem: every MCP
+# module wrapped `record_decision` in a bare `try/except: pass`, so a
+# disk-full, permissions, or schema-mismatch error was invisible to
+# the operator. The wrapper below replaces that pattern.
+#
+# Behaviour change vs the per-module wrappers:
+#   - exceptions are still caught (tool output must not break);
+#   - a structured warning is logged with the module + decision name;
+#   - a per-module failure counter is incremented for `/health` to
+#     expose. Operators can now alert on "audit failures > 0" without
+#     parsing logs.
+
+_FAILURE_COUNTER: dict[str, int] = {}
+_FAILURE_COUNTER_LOCK = Lock()
+
+
+def safe_record_decision(
+    module_name: str,
+    *,
+    input_data: Any,
+    output_data: Any,
+    decision: str,
+    action: str,
+    metadata: dict[str, Any] | None = None,
+) -> AuditEntry | None:
+    """Best-effort audit-chain record. Logs and counts on failure.
+
+    Replaces the per-module ``_safe_record_decision`` + bare ``pass``
+    pattern flagged in audit findings P1.F01 / P1.F02 / P5.F01.
+
+    On success returns the recorded :class:`AuditEntry`. On failure
+    returns ``None`` after logging a warning and incrementing the
+    module-scoped failure counter exposed via :func:`failure_stats`.
+    """
+    try:
+        return record_decision(
+            module_name,
+            input_data=input_data,
+            output_data=output_data,
+            decision=decision,
+            action=action,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        with _FAILURE_COUNTER_LOCK:
+            _FAILURE_COUNTER[module_name] = (
+                _FAILURE_COUNTER.get(module_name, 0) + 1
+            )
+        logger.warning(
+            "audit_chain_record_failed",
+            extra={
+                # NB: "module" is a reserved LogRecord attribute name;
+                # use "audit_module" so structlog/json log handlers do
+                # not raise a KeyError on emission.
+                "audit_module": module_name,
+                "action": action,
+                "decision": decision,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+        return None
+
+
+def failure_stats() -> dict[str, int]:
+    """Return a snapshot of audit-chain failure counters per module.
+
+    Exposed via the ``/health`` endpoint so operators can detect
+    silent audit-chain failures without parsing logs.
+    """
+    with _FAILURE_COUNTER_LOCK:
+        return dict(_FAILURE_COUNTER)
+
+
+def reset_failure_stats() -> None:
+    """Reset the failure counter (test helper)."""
+    with _FAILURE_COUNTER_LOCK:
+        _FAILURE_COUNTER.clear()
+
+
 def verify_chain(module_name: str) -> VerificationResult:
     """Walk ``module_name``'s chain and check every hash + link.
 
